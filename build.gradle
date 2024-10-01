@@ -1,0 +1,93 @@
+plugins {
+    id "java-library"
+    id "com.gtnewhorizons.retrofuturagradle" version "1.3.26"
+}
+
+archivesBaseName = "${project.mod_id}-mc${project.minecraft_version}-${project.mod_version}"
+
+// Set the toolchain version to decouple the Java we run Gradle with from the Java used to compile and run the mod
+java {
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(8))
+        // Azul covers the most platforms for Java 8 toolchains, crucially including MacOS arm64
+        vendor.set(org.gradle.jvm.toolchain.JvmVendorSpec.AZUL)
+    }
+}
+
+minecraft {
+    mcVersion.set(minecraft_version)
+    username.set("Developer")
+
+    injectedTags.put("MOD_VERSION", mod_version)
+    injectedTags.put("MOD_NAME", "Vintagium")
+}
+
+tasks.injectTags.outputClassName.set("${mod_base_package}.Tags")
+
+tasks.deobfuscateMergedJarToSrg.configure {accessTransformerFiles.from("src/main/resources/META-INF/vintagium_at.cfg")}
+
+repositories {
+    maven {	url "https://maven.cleanroommc.com" }
+    maven {
+        name 'SpongePowered Maven'
+        url 'https://repo.spongepowered.org/maven'
+    }
+    maven {
+        url "https://cursemaven.com"
+        content {
+            includeGroup "curse.maven"
+        }
+    }
+}
+
+dependencies {
+    def mixinBooter = modUtils.enableMixins("zone.rong:mixinbooter:8.9", "vintagium.mixins.refmap.json")
+    api (mixinBooter) {
+        transitive = false
+    }
+    annotationProcessor "org.ow2.asm:asm-debug-all:5.2"
+    annotationProcessor "com.google.guava:guava:32.1.2-jre"
+    annotationProcessor "com.google.code.gson:gson:2.8.9"
+    annotationProcessor (mixinBooter) {
+        transitive = false
+    }
+
+    // mod compat
+    implementation rfg.deobf("curse.maven:codechicken-lib-1-8-242818:2779848")
+    implementation rfg.deobf("curse.maven:censoredasm-460609:4800875")
+    implementation rfg.deobf("curse.maven:fermiumasm-971247:5116326")
+
+    // testing
+    //implementation rfg.deobf("curse.maven:enderio-64578:4674244")
+    //implementation rfg.deobf("curse.maven:endercore-231868:4671384")
+    //implementation rfg.deobf("curse.maven:redstoneflux-270789:2920436")
+    //implementation rfg.deobf("curse.maven:cofhcore-69162:2920433")
+    //implementation rfg.deobf("curse.maven:cofhworld-271384:2920434")
+    //implementation rfg.deobf("curse.maven:thermfound-222880:2926428")
+    //implementation rfg.deobf("curse.maven:thermdyn-227443:2920505")
+    //implementation rfg.deobf("curse.maven:ae2-223794:2747063")
+}
+
+jar {
+    manifest {
+        attributes (
+                "FMLCorePlugin": "me.jellysquid.mods.sodium.client.SodiumMixinTweaker",
+                "FMLCorePluginContainsFMLMod": true,
+                "ForceLoadAsMod": true,
+                "FMLAT": "vintagium_at.cfg"
+        )
+    }
+}
+
+processResources {
+    filesMatching("mcmod.info") { fcd ->
+        fcd.expand(
+                'mod_id': project.mod_id,
+                'mod_name': project.mod_name,
+                'mod_version': project.mod_version,
+                'mod_description': project.mod_description,
+                'minecraft_version': project.minecraft_version
+        )
+    }
+}
+
