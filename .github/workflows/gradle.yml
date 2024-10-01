@@ -1,28 +1,26 @@
-# Used when a release is pushed to GitHub
-# This does not make use of any caching as to ensure a clean build
-name: build-release
+# This workflow will build a Java project with Gradle
+# For more information see: https://help.github.com/actions/language-and-framework-guides/building-and-testing-java-with-gradle
 
-on:
-  release:
-     types:
-       - published
+name: Build mod
+
+on: [push, pull_request]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout sources
-        uses: actions/checkout@v3
-      - name: Set up JDK
-        uses: actions/setup-java@v2
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
-          java-version: 8
-      - name: Build artifacts
-        run: ./gradlew build publishMods -Pbuild.release=true
-      - name: Upload assets to GitHub
-        uses: AButler/upload-release-assets@v2.0
+          java-version: '8'
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+      - name: Build the mod
+        run: ./gradlew --no-daemon build
+      - uses: actions/upload-artifact@v2
         with:
-          # Filter built files to disregard -sources and -dev, and leave only the minecraft-compatible jars.
-          files: 'build/libs/*[0-9].jar;LICENSE'
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          name: Vintagium
+          path: build/libs
