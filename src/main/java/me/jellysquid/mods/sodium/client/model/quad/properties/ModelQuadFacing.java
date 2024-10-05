@@ -1,43 +1,54 @@
 package me.jellysquid.mods.sodium.client.model.quad.properties;
 
-import net.minecraft.core.Direction;
+import net.minecraft.util.EnumFacing;
 
 public enum ModelQuadFacing {
-    POS_X,
-    POS_Y,
-    POS_Z,
-    NEG_X,
-    NEG_Y,
-    NEG_Z,
+    UP,
+    DOWN,
+    EAST,
+    WEST,
+    SOUTH,
+    NORTH,
     UNASSIGNED;
 
     public static final ModelQuadFacing[] VALUES = ModelQuadFacing.values();
-
     public static final int COUNT = VALUES.length;
 
-    public static final int NONE = 0;
-    public static final int ALL = (1 << COUNT) - 1;
-
-    public static ModelQuadFacing fromDirection(Direction dir) {
-        return switch (dir) {
-            case DOWN   -> NEG_Y;
-            case UP     -> POS_Y;
-            case NORTH  -> NEG_Z;
-            case SOUTH  -> POS_Z;
-            case WEST   -> NEG_X;
-            case EAST   -> POS_X;
-        };
+    public static ModelQuadFacing fromDirection(EnumFacing dir) {
+        switch (dir) {
+            case DOWN:
+                return DOWN;
+            case UP:
+                return UP;
+            case NORTH:
+                return NORTH;
+            case SOUTH:
+                return SOUTH;
+            case WEST:
+                return WEST;
+            case EAST:
+                return EAST;
+            default:
+                return UNASSIGNED;
+        }
     }
-
+    
     public ModelQuadFacing getOpposite() {
-        return switch (this) {
-            case POS_Y -> NEG_Y;
-            case NEG_Y -> POS_Y;
-            case POS_X -> NEG_X;
-            case NEG_X -> POS_X;
-            case POS_Z -> NEG_Z;
-            case NEG_Z -> POS_Z;
-            default -> UNASSIGNED;
-        };
+        switch (this) {
+            case UP:
+                return DOWN;
+            case DOWN:
+                return UP;
+            case EAST:
+                return WEST;
+            case WEST:
+                return EAST;
+            case SOUTH:
+                return NORTH;
+            case NORTH:
+                return SOUTH;
+            default:
+                return UNASSIGNED;
+        }
     }
 }

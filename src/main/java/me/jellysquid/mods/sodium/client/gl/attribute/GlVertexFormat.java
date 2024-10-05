@@ -2,28 +2,32 @@ package me.jellysquid.mods.sodium.client.gl.attribute;
 
 import java.util.EnumMap;
 
+import me.jellysquid.mods.sodium.client.SodiumClientMod;
+
 /**
  * Provides a generic vertex format which contains the attributes defined by {@param T}. Other code can then retrieve
  * the attributes and work with encoded data in a generic manner without needing to rely on a specific format.
  *
  * @param <T> The enumeration over the vertex attributes
  */
-public class GlVertexFormat<T extends Enum<T>> {
+public class GlVertexFormat<T extends Enum<T>> implements BufferVertexFormat {
     private final Class<T> attributeEnum;
     private final EnumMap<T, GlVertexAttribute> attributesKeyed;
+    private final GlVertexAttribute[] attributesArray;
 
     private final int stride;
 
     public GlVertexFormat(Class<T> attributeEnum, EnumMap<T, GlVertexAttribute> attributesKeyed, int stride) {
         this.attributeEnum = attributeEnum;
         this.attributesKeyed = attributesKeyed;
+        this.attributesArray = attributesKeyed.values().toArray(new GlVertexAttribute[0]);
         this.stride = stride;
     }
 
     public static <T extends Enum<T>> Builder<T> builder(Class<T> type, int stride) {
         return new Builder<>(type, stride);
     }
-
+    
     /**
      * Returns the {@link GlVertexAttribute} of this vertex format bound to the type {@param name}.
      * @throws NullPointerException If the attribute does not exist in this format
@@ -51,6 +55,10 @@ public class GlVertexFormat<T extends Enum<T>> {
                 this.attributesKeyed.size(), this.stride);
     }
 
+    public GlVertexAttribute[] getAttributesArray() {
+        return this.attributesArray;
+    }
+
     public static class Builder<T extends Enum<T>> {
         private final EnumMap<T, GlVertexAttribute> attributes;
         private final Class<T> type;
@@ -62,8 +70,8 @@ public class GlVertexFormat<T extends Enum<T>> {
             this.stride = stride;
         }
 
-        public Builder<T> addElement(T type, int pointer, GlVertexAttributeFormat format, int count, boolean normalized, boolean intType) {
-            return this.addElement(type, new GlVertexAttribute(format, count, normalized, pointer, this.stride, intType));
+        public Builder<T> addElement(T type, int pointer, GlVertexAttributeFormat format, int count, boolean normalized) {
+            return this.addElement(type, new GlVertexAttribute(format, count, normalized, pointer, this.stride));
         }
 
         /**
@@ -74,11 +82,11 @@ public class GlVertexFormat<T extends Enum<T>> {
          * @throws IllegalStateException If an attribute is already bound to the generic type
          */
         private Builder<T> addElement(T type, GlVertexAttribute attribute) {
-            if (attribute.getPointer() >= this.stride) {
+            if ((attribute.getPointer() >= this.stride)) {
                 throw new IllegalArgumentException("Element starts outside vertex format");
             }
 
-            if (attribute.getPointer() + attribute.getSize() > this.stride) {
+            if ((attribute.getPointer() + attribute.getSize() > this.stride)) {
                 throw new IllegalArgumentException("Element extends outside vertex format");
             }
 

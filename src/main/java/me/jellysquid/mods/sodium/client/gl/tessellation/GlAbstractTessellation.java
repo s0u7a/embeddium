@@ -1,9 +1,10 @@
 package me.jellysquid.mods.sodium.client.gl.tessellation;
 
 import me.jellysquid.mods.sodium.client.gl.attribute.GlVertexAttributeBinding;
+import me.jellysquid.mods.sodium.client.gl.buffer.GlBufferTarget;
 import me.jellysquid.mods.sodium.client.gl.device.CommandList;
-import org.lwjgl.opengl.GL20C;
-import org.lwjgl.opengl.GL30C;
+import me.jellysquid.mods.sodium.client.gl.func.GlFunctions;
+import org.lwjgl.opengl.GL20;
 
 public abstract class GlAbstractTessellation implements GlTessellation {
     protected final GlPrimitiveType primitiveType;
@@ -21,17 +22,16 @@ public abstract class GlAbstractTessellation implements GlTessellation {
 
     protected void bindAttributes(CommandList commandList) {
         for (TessellationBinding binding : this.bindings) {
-            commandList.bindBuffer(binding.target(), binding.buffer());
+            commandList.bindBuffer(GlBufferTarget.ARRAY_BUFFER,  binding.getBuffer());
 
-            for (GlVertexAttributeBinding attrib : binding.attributeBindings()) {
-                if (attrib.isIntType()) {
-                    GL30C.glVertexAttribIPointer(attrib.getIndex(), attrib.getCount(), attrib.getFormat(),
-                            attrib.getStride(), attrib.getPointer());
-                } else {
-                    GL20C.glVertexAttribPointer(attrib.getIndex(), attrib.getCount(), attrib.getFormat(), attrib.isNormalized(),
-                            attrib.getStride(), attrib.getPointer());
+            for (GlVertexAttributeBinding attrib : binding.getAttributeBindings()) {
+            	GL20.glVertexAttribPointer(attrib.getIndex(), attrib.getCount(), attrib.getFormat(), attrib.isNormalized(),
+                        attrib.getStride(), attrib.getPointer());
+                GL20.glEnableVertexAttribArray(attrib.getIndex());
+
+                if (binding.isInstanced()) {
+                    GlFunctions.INSTANCED_ARRAY.glVertexAttribDivisor(attrib.getIndex(), 1);
                 }
-                GL20C.glEnableVertexAttribArray(attrib.getIndex());
             }
         }
     }

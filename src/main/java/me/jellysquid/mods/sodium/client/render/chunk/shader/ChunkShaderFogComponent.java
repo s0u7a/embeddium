@@ -1,11 +1,7 @@
 package me.jellysquid.mods.sodium.client.render.chunk.shader;
 
-import com.mojang.blaze3d.platform.GlStateManager;
 import me.jellysquid.mods.sodium.client.gl.compat.FogHelper;
-import me.jellysquid.mods.sodium.client.gl.shader.uniform.GlUniformFloat;
-import me.jellysquid.mods.sodium.client.gl.shader.uniform.GlUniformFloat4v;
-import me.jellysquid.mods.sodium.client.gl.shader.uniform.GlUniformInt;
-import net.minecraft.client.renderer.FogRenderer;
+import org.lwjgl.opengl.GL20;
 
 /**
  * These shader implementations try to remain compatible with the deprecated fixed function pipeline by manually
@@ -21,7 +17,7 @@ public abstract class ChunkShaderFogComponent {
     public abstract void setup();
 
     public static class None extends ChunkShaderFogComponent {
-        public None(ShaderBindingContext context) {
+        public None(ChunkProgram program) {
 
         }
 
@@ -32,42 +28,42 @@ public abstract class ChunkShaderFogComponent {
     }
 
     public static class Exp2 extends ChunkShaderFogComponent {
-        private final GlUniformFloat4v uFogColor;
-        private final GlUniformFloat uFogDensity;
+        private final int uFogColor;
+        private final int uFogDensity;
 
-        public Exp2(ShaderBindingContext context) {
-            this.uFogColor = context.bindUniform("u_FogColor", GlUniformFloat4v::new);
-            this.uFogDensity = context.bindUniform("u_FogDensity", GlUniformFloat::new);
+        public Exp2(ChunkProgram program) {
+            this.uFogColor = program.getUniformLocation("u_FogColor");
+            this.uFogDensity = program.getUniformLocation("u_FogDensity");
         }
 
         @Override
         public void setup() {
-            this.uFogColor.set(FogHelper.getFogColor());
-            this.uFogDensity.set(FogHelper.getFogDensity());
+            final float[] fc = FogHelper.getFogColor();
+            GL20.glUniform4f(this.uFogColor, fc[0], fc[1], fc[2], fc[3]);
+            GL20.glUniform1f(this.uFogDensity, FogHelper.getFogDensity());
         }
     }
 
-    public static class Smooth extends ChunkShaderFogComponent {
-        private final GlUniformFloat4v uFogColor;
+    public static class Linear extends ChunkShaderFogComponent {
+        private final int uFogColor;
+        private final int uFogLength;
+        private final int uFogEnd;
 
-        private final GlUniformInt uFogShape;
-        private final GlUniformFloat uFogStart;
-        private final GlUniformFloat uFogEnd;
-
-        public Smooth(ShaderBindingContext context) {
-            this.uFogColor = context.bindUniform("u_FogColor", GlUniformFloat4v::new);
-            this.uFogShape = context.bindUniform("u_FogShape", GlUniformInt::new);
-            this.uFogStart = context.bindUniform("u_FogStart", GlUniformFloat::new);
-            this.uFogEnd = context.bindUniform("u_FogEnd", GlUniformFloat::new);
+        public Linear(ChunkProgram program) {
+            this.uFogColor = program.getUniformLocation("u_FogColor");
+            this.uFogLength = program.getUniformLocation("u_FogLength");
+            this.uFogEnd = program.getUniformLocation("u_FogEnd");
         }
 
         @Override
         public void setup() {
-            this.uFogColor.set(FogHelper.getFogColor());
-            this.uFogShape.set(0); // Always spherical in 1.16
+            float end = FogHelper.getFogEnd();
+            float start = FogHelper.getFogStart();
+            float[] color = FogHelper.getFogColor();
 
-            this.uFogStart.setFloat(GlStateManager.FOG.start);
-            this.uFogEnd.setFloat(GlStateManager.FOG.end);
+            GL20.glUniform4f(this.uFogColor, color[0], color[1], color[2], color[3]);
+            GL20.glUniform1f(this.uFogLength, end - start);
+            GL20.glUniform1f(this.uFogEnd, end);
         }
     }
 

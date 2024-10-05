@@ -1,11 +1,10 @@
 package me.jellysquid.mods.sodium.client.model.light.smooth;
 
 import me.jellysquid.mods.sodium.client.model.light.data.LightDataAccess;
-import net.minecraft.client.renderer.LightTexture;
-import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
+import net.minecraft.util.EnumFacing;
+import net.minecraft.util.math.BlockPos;
 
-import static me.jellysquid.mods.sodium.client.model.light.data.ArrayLightDataCache.*;
+import static me.jellysquid.mods.sodium.client.model.light.cache.ArrayLightDataCache.*;
 
 class AoFaceData {
     public final int[] lm = new int[4];
@@ -16,7 +15,7 @@ class AoFaceData {
 
     private int flags;
 
-    public void initLightData(LightDataAccess cache, BlockPos pos, Direction direction, boolean offset) {
+    public void initLightData(LightDataAccess cache, BlockPos pos, EnumFacing direction, boolean offset) {
         final int x = pos.getX();
         final int y = pos.getY();
         final int z = pos.getZ();
@@ -26,118 +25,99 @@ class AoFaceData {
         final int adjZ;
 
         if (offset) {
-            adjX = x + direction.getStepX();
-            adjY = y + direction.getStepY();
-            adjZ = z + direction.getStepZ();
+            adjX = x + direction.getXOffset();
+            adjY = y + direction.getYOffset();
+            adjZ = z + direction.getZOffset();
         } else {
             adjX = x;
             adjY = y;
             adjZ = z;
         }
 
-        final int adjWord = cache.get(adjX, adjY, adjZ);
+        long adjWord = cache.get(adjX, adjY, adjZ);
 
         final int calm;
-        final boolean caem;
 
+        // Use the origin block's light values if the adjacent one is opaque
         if (offset && unpackFO(adjWord)) {
-            final int originWord = cache.get(x, y, z);
-            calm = getLightmap(originWord);
-            caem = unpackEM(originWord);
+            calm = unpackLM(cache.get(x, y, z));
         } else {
-            calm = getLightmap(adjWord);
-            caem = unpackEM(adjWord);
+            calm = unpackLM(adjWord);
         }
 
         final float caao = unpackAO(adjWord);
 
-        Direction[] faces = AoNeighborInfo.get(direction).faces;
+        EnumFacing[] faces = AoNeighborInfo.get(direction).faces;
 
-        final int e0 = cache.get(adjX, adjY, adjZ, faces[0]);
-        final int e0lm = getLightmap(e0);
+        final long e0 = cache.get(adjX, adjY, adjZ, faces[0]);
+        final int e0lm = unpackLM(e0);
         final float e0ao = unpackAO(e0);
         final boolean e0op = unpackOP(e0);
-        final boolean e0em = unpackEM(e0);
 
-        final int e1 = cache.get(adjX, adjY, adjZ, faces[1]);
-        final int e1lm = getLightmap(e1);
+        final long e1 = cache.get(adjX, adjY, adjZ, faces[1]);
+        final int e1lm = unpackLM(e1);
         final float e1ao = unpackAO(e1);
         final boolean e1op = unpackOP(e1);
-        final boolean e1em = unpackEM(e1);
 
-        final int e2 = cache.get(adjX, adjY, adjZ, faces[2]);
-        final int e2lm = getLightmap(e2);
+        final long e2 = cache.get(adjX, adjY, adjZ, faces[2]);
+        final int e2lm = unpackLM(e2);
         final float e2ao = unpackAO(e2);
         final boolean e2op = unpackOP(e2);
-        final boolean e2em = unpackEM(e2);
 
-        final int e3 = cache.get(adjX, adjY, adjZ, faces[3]);
-        final int e3lm = getLightmap(e3);
+        final long e3 = cache.get(adjX, adjY, adjZ, faces[3]);
+        final int e3lm = unpackLM(e3);
         final float e3ao = unpackAO(e3);
         final boolean e3op = unpackOP(e3);
-        final boolean e3em = unpackEM(e3);
 
         // If neither edge of a corner is occluded, then use the light
         final int c0lm;
         final float c0ao;
-        final boolean c0em;
 
-        if (e2op && e0op) {
+        if (!e2op && !e0op) {
             c0lm = e0lm;
             c0ao = e0ao;
-            c0em = e0em;
         } else {
-            int d0 = cache.get(adjX, adjY, adjZ, faces[0], faces[2]);
-            c0lm = getLightmap(d0);
+            long d0 = cache.get(adjX, adjY, adjZ, faces[0], faces[2]);
+            c0lm = unpackLM(d0);
             c0ao = unpackAO(d0);
-            c0em = unpackEM(d0);
         }
 
         final int c1lm;
         final float c1ao;
-        final boolean c1em;
 
-        if (e3op && e0op) {
+        if (!e3op && !e0op) {
             c1lm = e0lm;
             c1ao = e0ao;
-            c1em = e0em;
         } else {
-            int d1 = cache.get(adjX, adjY, adjZ, faces[0], faces[3]);
-            c1lm = getLightmap(d1);
+            long d1 = cache.get(adjX, adjY, adjZ, faces[0], faces[3]);
+            c1lm = unpackLM(d1);
             c1ao = unpackAO(d1);
-            c1em = unpackEM(d1);
         }
 
         final int c2lm;
         final float c2ao;
-        final boolean c2em;
 
-        if (e2op && e1op) {
-            // FIX: Use e1 instead of e0 to fix lighting errors in some directions
+        if (!e2op && !e1op) {
+            // FIX: Use e1 instead of c0 to fix lighting errors in some directions
             c2lm = e1lm;
             c2ao = e1ao;
-            c2em = e1em;
         } else {
-            int d2 = cache.get(adjX, adjY, adjZ, faces[1], faces[2]);
-            c2lm = getLightmap(d2);
+            long d2 = cache.get(adjX, adjY, adjZ, faces[1], faces[2]);
+            c2lm = unpackLM(d2);
             c2ao = unpackAO(d2);
-            c2em = unpackEM(d2);
         }
 
         final int c3lm;
         final float c3ao;
-        final boolean c3em;
 
-        if (e3op && e1op) {
-            // FIX: Use e1 instead of e0 to fix lighting errors in some directions
+        if (!e3op && !e1op) {
+            // FIX: Use e1 instead of c0 to fix lighting errors in some directions
             c3lm = e1lm;
             c3ao = e1ao;
-            c3em = e1em;
         } else {
-            int d3 = cache.get(adjX, adjY, adjZ, faces[1], faces[3]);
-            c3lm = getLightmap(d3);
+            long d3 = cache.get(adjX, adjY, adjZ, faces[1], faces[3]);
+            c3lm = unpackLM(d3);
             c3ao = unpackAO(d3);
-            c3em = unpackEM(d3);
         }
 
         float[] ao = this.ao;
@@ -147,10 +127,10 @@ class AoFaceData {
         ao[3] = (e3ao + e1ao + c3ao + caao) * 0.25f;
 
         int[] cb = this.lm;
-        cb[0] = calculateCornerBrightness(e3lm, e0lm, c1lm, calm, e3em, e0em, c1em, caem);
-        cb[1] = calculateCornerBrightness(e2lm, e0lm, c0lm, calm, e2em, e0em, c0em, caem);
-        cb[2] = calculateCornerBrightness(e2lm, e1lm, c2lm, calm, e2em, e1em, c2em, caem);
-        cb[3] = calculateCornerBrightness(e3lm, e1lm, c3lm, calm, e3em, e1em, c3em, caem);
+        cb[0] = calculateCornerBrightness(e3lm, e0lm, c1lm, calm);
+        cb[1] = calculateCornerBrightness(e2lm, e0lm, c0lm, calm);
+        cb[2] = calculateCornerBrightness(e2lm, e1lm, c2lm, calm);
+        cb[3] = calculateCornerBrightness(e3lm, e1lm, c3lm, calm);
 
         this.flags |= AoCompletionFlags.HAS_LIGHT_DATA;
     }
@@ -203,7 +183,7 @@ class AoFaceData {
         return i & 0xFF;
     }
 
-    private static int calculateCornerBrightness(int a, int b, int c, int d, boolean aem, boolean bem, boolean cem, boolean dem) {
+    private static int calculateCornerBrightness(int a, int b, int c, int d) {
         // FIX: Normalize corner vectors correctly to the minimum non-zero value between each one to prevent
         // strange issues
         if ((a == 0) || (b == 0) || (c == 0) || (d == 0)) {
@@ -215,21 +195,6 @@ class AoFaceData {
             b = Math.max(b, min);
             c = Math.max(c, min);
             d = Math.max(d, min);
-        }
-
-        // FIX: Apply the fullbright lightmap from emissive blocks at the very end so it cannot influence
-        // the minimum lightmap and produce incorrect results (for example, sculk sensors in a dark room)
-        if (aem) {
-            a = LightDataAccess.FULL_BRIGHT;
-        }
-        if (bem) {
-            b = LightDataAccess.FULL_BRIGHT;
-        }
-        if (cem) {
-            c = LightDataAccess.FULL_BRIGHT;
-        }
-        if (dem) {
-            d = LightDataAccess.FULL_BRIGHT;
         }
 
         return ((a + b + c + d) >> 2) & 0xFF00FF;

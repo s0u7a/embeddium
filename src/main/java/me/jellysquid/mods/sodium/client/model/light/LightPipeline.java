@@ -2,12 +2,12 @@ package me.jellysquid.mods.sodium.client.model.light;
 
 import me.jellysquid.mods.sodium.client.model.light.data.QuadLightData;
 import me.jellysquid.mods.sodium.client.model.quad.ModelQuadView;
-import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
+import net.minecraft.util.EnumFacing;
+import net.minecraft.util.math.BlockPos;
 
 /**
- * Light pipelines allow model quads for any location in the world to be lit regardless of what produced them
- * (blocks, fluids, or block entities).
+ * Light pipelines allow model quads for any location in the world to be lit using various backends, including fluids
+ * and block entities. 
  */
 public interface LightPipeline {
     /**
@@ -15,16 +15,8 @@ public interface LightPipeline {
      * @param quad The block model quad
      * @param pos The block position of the model this quad belongs to
      * @param out The data arrays which will store the calculated light data results
-     * @param cullFace The cull face of the quad
-     * @param lightFace The light face of the quad
+     * @param face The pre-computed facing vector of the quad
      * @param shade True if the block is shaded by ambient occlusion
      */
-    void calculate(ModelQuadView quad, BlockPos pos, QuadLightData out, Direction cullFace, Direction lightFace, boolean shade);
-
-    /**
-     * Reset any cached data for this pipeline.
-     */
-    default void reset() {
-
-    }
+	void calculate(ModelQuadView quad, BlockPos pos, QuadLightData out, EnumFacing cullFace, EnumFacing face, boolean shade);
 }

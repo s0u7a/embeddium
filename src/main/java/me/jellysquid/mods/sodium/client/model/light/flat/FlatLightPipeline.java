@@ -1,23 +1,14 @@
 package me.jellysquid.mods.sodium.client.model.light.flat;
 
-import me.jellysquid.mods.sodium.client.SodiumClientMod;
 import me.jellysquid.mods.sodium.client.model.light.LightPipeline;
 import me.jellysquid.mods.sodium.client.model.light.data.LightDataAccess;
 import me.jellysquid.mods.sodium.client.model.light.data.QuadLightData;
 import me.jellysquid.mods.sodium.client.model.quad.ModelQuadView;
 import me.jellysquid.mods.sodium.client.model.quad.properties.ModelQuadFlags;
-import net.caffeinemc.mods.sodium.api.util.NormI8;
-import net.minecraft.client.renderer.LevelRenderer;
-import net.minecraft.client.renderer.LightTexture;
-import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
-import net.minecraft.world.level.BlockAndTintGetter;
-import net.minecraft.world.level.block.state.BlockState;
-import net.minecraftforge.client.model.pipeline.LightUtil;
+import net.minecraft.util.EnumFacing;
+import net.minecraft.util.math.BlockPos;
 
 import java.util.Arrays;
-
-import static me.jellysquid.mods.sodium.client.model.light.data.LightDataAccess.*;
 
 /**
  * A light pipeline which implements "classic-style" lighting through simply using the light value of the adjacent
@@ -29,18 +20,12 @@ public class FlatLightPipeline implements LightPipeline {
      */
     private final LightDataAccess lightCache;
 
-    /**
-     * Whether or not to even attempt to shade quads using their normals rather than light face.
-     */
-    private final boolean useQuadNormalsForShading;
-
     public FlatLightPipeline(LightDataAccess lightCache) {
         this.lightCache = lightCache;
-        this.useQuadNormalsForShading = SodiumClientMod.options().quality.useQuadNormalsForShading;
     }
 
     @Override
-    public void calculate(ModelQuadView quad, BlockPos pos, QuadLightData out, Direction cullFace, Direction lightFace, boolean shade) {
+    public void calculate(ModelQuadView quad, BlockPos pos, QuadLightData out, EnumFacing cullFace, EnumFacing face, boolean shade) {
         int lightmap;
 
         // To match vanilla behavior, use the cull face if it exists/is available
@@ -50,44 +35,32 @@ public class FlatLightPipeline implements LightPipeline {
             int flags = quad.getFlags();
             // If the face is aligned, use the light data above it
             // To match vanilla behavior, also treat the face as aligned if it is parallel and the block state is a full cube
-            if ((flags & ModelQuadFlags.IS_ALIGNED) != 0 || ((flags & ModelQuadFlags.IS_PARALLEL) != 0 && unpackFC(this.lightCache.get(pos)))) {
-                lightmap = getOffsetLightmap(pos, lightFace);
+            if ((flags & ModelQuadFlags.IS_ALIGNED) != 0 || ((flags & ModelQuadFlags.IS_PARALLEL) != 0 && LightDataAccess.unpackFC(this.lightCache.get(pos)))) {
+                lightmap = getOffsetLightmap(pos, face);
             } else {
-                lightmap = getEmissiveLightmap(this.lightCache.get(pos));
+                lightmap = LightDataAccess.unpackLM(this.lightCache.get(pos));
             }
         }
 
         Arrays.fill(out.lm, lightmap);
-        if((quad.getFlags() & ModelQuadFlags.IS_VANILLA_SHADED) != 0 || !this.useQuadNormalsForShading) {
-            Arrays.fill(out.br, this.lightCache.getWorld().getShade(lightFace, shade));
-        } else {
-            this.applySidedBrightnessFromNormals(quad, out, shade);
-        }
-    }
-
-    private void applySidedBrightnessFromNormals(ModelQuadView quad, QuadLightData out, boolean shade) {
-        int normal = quad.getModFaceNormal();
-        float br = shade ? LightUtil.diffuseLight(NormI8.unpackX(normal), NormI8.unpackY(normal), NormI8.unpackZ(normal)) : 1.0f;
-        Arrays.fill(out.br, br);
+        Arrays.fill(out.br, this.lightCache.getWorld().getBrightness(face, shade));
     }
 
     /**
      * When vanilla computes an offset lightmap with flat lighting, it passes the original BlockState but the
-     * offset BlockPos to {@link LevelRenderer#getLightColor(BlockAndTintGetter, BlockState, BlockPos)}.
+     * offset BlockPos to {@link WorldRenderer#getLightmapCoordinates(BlockRenderView, BlockState, BlockPos)}.
      * This does not make much sense but fixes certain issues, primarily dark quads on light-emitting blocks
      * behind tinted glass. {@link LightDataAccess} cannot efficiently store lightmaps computed with
      * inconsistent values so this method exists to mirror vanilla behavior as closely as possible.
      */
-    private int getOffsetLightmap(BlockPos pos, Direction face) {
-        int word = this.lightCache.get(pos);
-
-        // Check emissivity of the origin state
-        if (unpackEM(word)) {
-            return LightDataAccess.FULL_BRIGHT;
+    private int getOffsetLightmap(BlockPos pos, EnumFacing face) {
+        int lightmap = LightDataAccess.unpackLM(this.lightCache.get(pos, face));
+        // If the block light is not 15 (max)...
+        if ((lightmap & 0xF0) != 0xF0) {
+            int originLightmap = LightDataAccess.unpackLM(this.lightCache.get(pos));
+            // ...take the maximum combined block light at the origin and offset positions
+            lightmap = (lightmap & ~0xFF) | Math.max(lightmap & 0xFF, originLightmap & 0xFF);
         }
-
-        // Use world light values from the offset pos, but luminance from the origin pos
-        int adjWord = this.lightCache.get(pos, face);
-        return LightTexture.pack(Math.max(unpackBL(adjWord), unpackLU(word)), unpackSL(adjWord));
+        return lightmap;
     }
 }

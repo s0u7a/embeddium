@@ -1,17 +1,24 @@
 package me.jellysquid.mods.sodium.client.util.color;
 
+import net.minecraft.util.math.MathHelper;
+import repack.joml.Vector3d;
+
 import java.util.function.Function;
-import net.minecraft.util.Mth;
-import net.minecraft.world.phys.Vec3;
+
+import static repack.joml.Math.lerp;
 
 public class FastCubicSampler {
     private static final double[] DENSITY_CURVE = new double[] { 0.0D, 1.0D, 4.0D, 6.0D, 4.0D, 1.0D, 0.0D };
     private static final int DIAMETER = 6;
 
-    public static Vec3 sampleColor(Vec3 pos, ColorFetcher colorFetcher, Function<Vec3, Vec3> transformer) {
-        int intX = Mth.floor(pos.x());
-        int intY = Mth.floor(pos.y());
-        int intZ = Mth.floor(pos.z());
+    private static Vector3d unpackRgb(int rgb) {
+        return new Vector3d((rgb >> 16 & 255) / 255.0, (rgb >> 8 & 255) / 255.0, (rgb & 255) / 255.0);
+    }
+
+    public static Vector3d sampleColor(Vector3d pos, ColorFetcher colorFetcher, Function<Vector3d, Vector3d> transformer) {
+        int intX = MathHelper.floor(pos.x);
+        int intY = MathHelper.floor(pos.y);
+        int intZ = MathHelper.floor(pos.z);
 
         int[] values = new int[DIAMETER * DIAMETER * DIAMETER];
 
@@ -32,35 +39,35 @@ public class FastCubicSampler {
         // Fast path! Skip blending the colors if all inputs are the same
         if (isHomogenousArray(values)) {
             // Take the first color if it's homogenous (all elements are the same...)
-            return transformer.apply(Vec3.fromRGB24(values[0]));
+            return transformer.apply(unpackRgb(values[0]));
         }
 
-        double deltaX = pos.x() - (double)intX;
-        double deltaY = pos.y() - (double)intY;
-        double deltaZ = pos.z() - (double)intZ;
+        double deltaX = pos.x - (double)intX;
+        double deltaY = pos.y - (double)intY;
+        double deltaZ = pos.z - (double)intZ;
 
-        Vec3 sum = Vec3.ZERO;
+        Vector3d sum = new Vector3d();
         double totalFactor = 0.0D;
 
         for(int x = 0; x < DIAMETER; ++x) {
-            double densityX = Mth.lerp(deltaX, DENSITY_CURVE[x + 1], DENSITY_CURVE[x]);
+            double densityX = lerp(DENSITY_CURVE[x + 1], DENSITY_CURVE[x], deltaX);
 
             for(int y = 0; y < DIAMETER; ++y) {
-                double densityY = Mth.lerp(deltaY, DENSITY_CURVE[y + 1], DENSITY_CURVE[y]);
+                double densityY = lerp(DENSITY_CURVE[y + 1], DENSITY_CURVE[y], deltaY);
 
                 for(int z = 0; z < DIAMETER; ++z) {
-                    double densityZ = Mth.lerp(deltaZ, DENSITY_CURVE[z + 1], DENSITY_CURVE[z]);
+                    double densityZ = lerp(DENSITY_CURVE[z + 1], DENSITY_CURVE[z], deltaZ);
 
                     double factor = densityX * densityY * densityZ;
                     totalFactor += factor;
 
-                    Vec3 color = transformer.apply(Vec3.fromRGB24(values[index(x, y, z)]));
-                    sum = sum.add(color.scale(factor));
+                    Vector3d color = transformer.apply(unpackRgb(values[index(x, y, z)]));
+                    sum.add(color.mul(factor));
                 }
             }
         }
 
-        sum = sum.scale(1.0D / totalFactor);
+        sum.mul(1.0D / totalFactor);
 
         return sum;
     }

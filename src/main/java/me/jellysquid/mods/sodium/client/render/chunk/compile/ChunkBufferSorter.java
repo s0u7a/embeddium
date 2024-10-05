@@ -1,131 +1,177 @@
 package me.jellysquid.mods.sodium.client.render.chunk.compile;
 
 import com.google.common.primitives.Floats;
+import it.unimi.dsi.fastutil.ints.AbstractIntComparator;
 import it.unimi.dsi.fastutil.ints.IntArrays;
-import me.jellysquid.mods.sodium.client.util.NativeBuffer;
-import org.embeddedt.embeddium.render.chunk.sorting.TranslucentQuadAnalyzer;
-import org.jetbrains.annotations.Nullable;
-import org.lwjgl.system.MemoryUtil;
+import me.jellysquid.mods.sodium.client.model.vertex.type.ChunkVertexType;
+import me.jellysquid.mods.sodium.client.render.chunk.format.hfp.HFPModelVertexType;
+import me.jellysquid.mods.sodium.client.render.chunk.format.sfp.SFPModelVertexType;
 
+import java.nio.Buffer;
+import java.nio.ByteBuffer;
+import java.nio.FloatBuffer;
+import java.nio.ShortBuffer;
 import java.util.BitSet;
 
 public class ChunkBufferSorter {
-    private static final int ELEMENTS_PER_PRIMITIVE = 6;
-    private static final int VERTICES_PER_PRIMITIVE = 4;
+    public static void sortStandardFormat(ChunkVertexType vertexType, ByteBuffer buffer, int bufferLen, float x, float y, float z) {
+        boolean isCompact;
 
-    private static final int FAKE_STATIC_CAMERA_OFFSET = 1000;
+        if(vertexType.getClass() == HFPModelVertexType.class) {
+            isCompact = true;
+        } else if(vertexType.getClass() == SFPModelVertexType.class) {
+            isCompact = false;
+        } else
+            return; // ignore unsupported vertex types to avoid corruption
 
-    public static int getIndexBufferSize(int numPrimitives) {
-        return numPrimitives * ELEMENTS_PER_PRIMITIVE * 4;
-    }
+        // Quad stride by Float size
+        int quadStride = vertexType.getBufferVertexFormat().getStride();
 
-    public static NativeBuffer generateSimpleIndexBuffer(NativeBuffer indexBuffer, int numPrimitives, int offset) {
-        int minimumRequiredBufferSize = getIndexBufferSize(numPrimitives) + (offset * 4);
-        if(indexBuffer.getLength() < minimumRequiredBufferSize) {
-            throw new IllegalStateException("Given index buffer has length " + indexBuffer.getLength() + " but we need " + minimumRequiredBufferSize);
-        }
-        long ptr = MemoryUtil.memAddress(indexBuffer.getDirectBuffer()) + (offset * 4L);
+        int quadStart = ((Buffer)buffer).position();
+        int quadCount = bufferLen/quadStride/4;
 
-        for (int primitiveIndex = 0; primitiveIndex < numPrimitives; primitiveIndex++) {
-            int indexOffset = primitiveIndex * ELEMENTS_PER_PRIMITIVE;
-            int vertexOffset = primitiveIndex * VERTICES_PER_PRIMITIVE;
-
-            MemoryUtil.memPutInt(ptr + (indexOffset + 0) * 4, vertexOffset + 0);
-            MemoryUtil.memPutInt(ptr + (indexOffset + 1) * 4, vertexOffset + 1);
-            MemoryUtil.memPutInt(ptr + (indexOffset + 2) * 4, vertexOffset + 2);
-
-            MemoryUtil.memPutInt(ptr + (indexOffset + 3) * 4, vertexOffset + 2);
-            MemoryUtil.memPutInt(ptr + (indexOffset + 4) * 4, vertexOffset + 3);
-            MemoryUtil.memPutInt(ptr + (indexOffset + 5) * 4, vertexOffset + 0);
-        }
-
-        return indexBuffer;
-    }
-
-    private static NativeBuffer generateIndexBuffer(NativeBuffer indexBuffer, int[] primitiveMapping) {
-        int bufferSize = getIndexBufferSize(primitiveMapping.length);
-        if(indexBuffer.getLength() != bufferSize) {
-            throw new IllegalStateException("Given index buffer has length " + indexBuffer.getLength() + " but we expected " + bufferSize);
-        }
-        long ptr = MemoryUtil.memAddress(indexBuffer.getDirectBuffer());
-
-        for (int primitiveIndex = 0; primitiveIndex < primitiveMapping.length; primitiveIndex++) {
-            int indexOffset = primitiveIndex * ELEMENTS_PER_PRIMITIVE;
-
-            // Map to the desired primitive
-            int vertexOffset = primitiveMapping[primitiveIndex] * VERTICES_PER_PRIMITIVE;
-
-            MemoryUtil.memPutInt(ptr + (indexOffset + 0) * 4, vertexOffset + 0);
-            MemoryUtil.memPutInt(ptr + (indexOffset + 1) * 4, vertexOffset + 1);
-            MemoryUtil.memPutInt(ptr + (indexOffset + 2) * 4, vertexOffset + 2);
-
-            MemoryUtil.memPutInt(ptr + (indexOffset + 3) * 4, vertexOffset + 2);
-            MemoryUtil.memPutInt(ptr + (indexOffset + 4) * 4, vertexOffset + 3);
-            MemoryUtil.memPutInt(ptr + (indexOffset + 5) * 4, vertexOffset + 0);
-        }
-
-        return indexBuffer;
-    }
-
-    private static void buildStaticDistanceArray(float[] centers, float[] distanceArray, float x, float y, float z,
-                                                 float normX, float normY, float normZ, int quadCount, BitSet normalSigns) {
-        for (int quadIdx = 0; quadIdx < quadCount; ++quadIdx) {
-            int centerIdx = quadIdx * 3;
-
-            // Compute distance using projection of vector from camera->quad center onto shared normal, flipped by sign
-            // to accommodate backwards-facing quads in the same plane extensions
-
-            float qX = centers[centerIdx + 0] - x;
-            float qY = centers[centerIdx + 1] - y;
-            float qZ = centers[centerIdx + 2] - z;
-
-            distanceArray[quadIdx] = (normX * qX + normY * qY + normZ * qZ) * (normalSigns.get(quadIdx) ? 1 : -1);
-        }
-    }
-
-    private static void buildDynamicDistanceArray(float[] centers, float[] distanceArray, int quadCount, float x,
-                                                  float y, float z) {
-        // Sort using distance to camera directly
-        for (int quadIdx = 0; quadIdx < quadCount; ++quadIdx) {
-            int centerIdx = quadIdx * 3;
-
-            float qX = centers[centerIdx + 0] - x;
-            float qY = centers[centerIdx + 1] - y;
-            float qZ = centers[centerIdx + 2] - z;
-            distanceArray[quadIdx] = qX * qX + qY * qY + qZ * qZ;
-        }
-    }
-
-    public static NativeBuffer sort(NativeBuffer indexBuffer, @Nullable TranslucentQuadAnalyzer.SortState chunkData, float x, float y, float z) {
-        if (chunkData == null || chunkData.level() == TranslucentQuadAnalyzer.Level.NONE || chunkData.centers().length < 3) {
-            return indexBuffer;
-        }
-
-        float[] centers = chunkData.centers();
-        int quadCount = centers.length / 3;
-        int[] indicesArray = new int[quadCount];
         float[] distanceArray = new float[quadCount];
-        boolean isStatic = chunkData.level() == TranslucentQuadAnalyzer.Level.STATIC;
-        for (int quadIdx = 0; quadIdx < quadCount; ++quadIdx) {
-            indicesArray[quadIdx] = quadIdx;
-        }
+        int[] indicesArray = new int[quadCount];
 
-        if (isStatic) {
-            buildStaticDistanceArray(centers, distanceArray,
-                    centers[0] + chunkData.sharedNormal().x * FAKE_STATIC_CAMERA_OFFSET,
-                    centers[1] + chunkData.sharedNormal().y * FAKE_STATIC_CAMERA_OFFSET,
-                    centers[2] + chunkData.sharedNormal().z * FAKE_STATIC_CAMERA_OFFSET,
-                    chunkData.sharedNormal().x,
-                    chunkData.sharedNormal().y,
-                    chunkData.sharedNormal().z,
-                    quadCount,
-                    chunkData.normalSigns());
+        if(isCompact) {
+            ShortBuffer shortBuffer = buffer.asShortBuffer();
+            int vertexSizeShort = quadStride / 2;
+            for (int quadIdx = 0; quadIdx < quadCount; ++quadIdx) {
+                distanceArray[quadIdx] = getDistanceSqHFP(shortBuffer, x, y, z, vertexSizeShort, quadStart + (quadIdx * quadStride * 2));
+                indicesArray[quadIdx] = quadIdx;
+            }
         } else {
-            buildDynamicDistanceArray(centers, distanceArray, quadCount, x, y, z);
+            FloatBuffer floatBuffer = buffer.asFloatBuffer();
+            int vertexSizeInteger = quadStride / 4;
+            for (int quadIdx = 0; quadIdx < quadCount; ++quadIdx) {
+                distanceArray[quadIdx] = getDistanceSqSFP(floatBuffer, x, y, z, vertexSizeInteger, quadStart + (quadIdx * quadStride));
+                indicesArray[quadIdx] = quadIdx;
+            }
         }
 
-        IntArrays.mergeSort(indicesArray, (a, b) -> Floats.compare(distanceArray[b], distanceArray[a]));
+        IntArrays.mergeSort(indicesArray, new AbstractIntComparator() {
+            @Override
+            public int compare(int a, int b) {
+                return Floats.compare(distanceArray[b], distanceArray[a]);
+            }
+        });
 
-        return generateIndexBuffer(indexBuffer, indicesArray);
+        rearrangeQuads(buffer, indicesArray, quadStride, quadStart);
+    }
+
+    private static void rearrangeQuads(ByteBuffer quadBuffer, int[] indicesArray, int quadStride, int quadStart) {
+        FloatBuffer floatBuffer = quadBuffer.asFloatBuffer();
+        BitSet bits = new BitSet();
+
+        FloatBuffer tmp =  FloatBuffer.allocate(quadStride);
+
+        for (int l = bits.nextClearBit(0); l < indicesArray.length; l = bits.nextClearBit(l + 1)) {
+            int m = indicesArray[l];
+
+            if (m != l) {
+                sliceQuad(floatBuffer, m, quadStride, quadStart);
+                ((Buffer)tmp).clear();
+                tmp.put(floatBuffer);
+
+                int n = m;
+
+                for (int o = indicesArray[m]; n != l; o = indicesArray[o]) {
+                    sliceQuad(floatBuffer, o, quadStride, quadStart);
+                    FloatBuffer floatBuffer3 = floatBuffer.slice();
+
+                    sliceQuad(floatBuffer, n, quadStride, quadStart);
+                    floatBuffer.put(floatBuffer3);
+
+                    bits.set(n);
+                    n = o;
+                }
+
+                sliceQuad(floatBuffer, l, quadStride, quadStart);
+                ((Buffer)tmp).flip();
+
+                floatBuffer.put(tmp);
+            }
+
+            bits.set(l);
+        }
+    }
+
+    private static void sliceQuad(FloatBuffer floatBuffer, int quadIdx, int quadStride, int quadStart) {
+        int base = quadStart + (quadIdx * quadStride);
+
+        ((Buffer)floatBuffer).limit(base + quadStride);
+        ((Buffer)floatBuffer).position(base);
+    }
+
+    private static float getDistanceSqSFP(FloatBuffer buffer, float xCenter, float yCenter, float zCenter, int stride, int start) {
+        int vertexBase = start;
+        float x1 = buffer.get(vertexBase);
+        float y1 = buffer.get(vertexBase + 1);
+        float z1 = buffer.get(vertexBase + 2);
+
+        //System.out.println("camera: " + xCenter + "," + yCenter + "," + zCenter);
+        //System.out.println("buffer1: " + x1 + "," + y1 + "," + z1);
+
+        vertexBase += stride;
+        float x2 = buffer.get(vertexBase);
+        float y2 = buffer.get(vertexBase + 1);
+        float z2 = buffer.get(vertexBase + 2);
+        //System.out.println("buffer2: " + x2 + "," + y2 + "," + z2);
+
+        vertexBase += stride;
+        float x3 = buffer.get(vertexBase);
+        float y3 = buffer.get(vertexBase + 1);
+        float z3 = buffer.get(vertexBase + 2);
+        //System.out.println("buffer3: " + x3 + "," + y3 + "," + z3);
+
+        vertexBase += stride;
+        float x4 = buffer.get(vertexBase);
+        float y4 = buffer.get(vertexBase + 1);
+        float z4 = buffer.get(vertexBase + 2);
+        //System.out.println("buffer4: " + x4 + "," + y4 + "," + z4);
+
+        float xDist = ((x1 + x2 + x3 + x4) * 0.25F) - xCenter;
+        float yDist = ((y1 + y2 + y3 + y4) * 0.25F) - yCenter;
+        float zDist = ((z1 + z2 + z3 + z4) * 0.25F) - zCenter;
+
+        return (xDist * xDist) + (yDist * yDist) + (zDist * zDist);
+    }
+
+    private static float normalizeShort(short s) {
+        return (float)Short.toUnsignedInt(s) / 2048.0f;
+    }
+
+    private static float getDistanceSqHFP(ShortBuffer buffer, float xCenter, float yCenter, float zCenter, int stride, int start) {
+        int vertexBase = start;
+        float x1 = normalizeShort(buffer.get(vertexBase));
+        float y1 = normalizeShort(buffer.get(vertexBase + 1));
+        float z1 = normalizeShort(buffer.get(vertexBase + 2));
+
+        //System.out.println("camera: " + xCenter + "," + yCenter + "," + zCenter);
+        //System.out.println("buffer1: " + x1 + "," + y1 + "," + z1);
+
+        vertexBase += stride;
+        float x2 = normalizeShort(buffer.get(vertexBase));
+        float y2 = normalizeShort(buffer.get(vertexBase + 1));
+        float z2 = normalizeShort(buffer.get(vertexBase + 2));
+        //System.out.println("buffer2: " + x2 + "," + y2 + "," + z2);
+
+        vertexBase += stride;
+        float x3 = normalizeShort(buffer.get(vertexBase));
+        float y3 = normalizeShort(buffer.get(vertexBase + 1));
+        float z3 = normalizeShort(buffer.get(vertexBase + 2));
+        //System.out.println("buffer3: " + x3 + "," + y3 + "," + z3);
+
+        vertexBase += stride;
+        float x4 = normalizeShort(buffer.get(vertexBase));
+        float y4 = normalizeShort(buffer.get(vertexBase + 1));
+        float z4 = normalizeShort(buffer.get(vertexBase + 2));
+        //System.out.println("buffer4: " + x4 + "," + y4 + "," + z4);
+
+        float xDist = ((x1 + x2 + x3 + x4) * 0.25F) - xCenter;
+        float yDist = ((y1 + y2 + y3 + y4) * 0.25F) - yCenter;
+        float zDist = ((z1 + z2 + z3 + z4) * 0.25F) - zCenter;
+
+        return (xDist * xDist) + (yDist * yDist) + (zDist * zDist);
     }
 }

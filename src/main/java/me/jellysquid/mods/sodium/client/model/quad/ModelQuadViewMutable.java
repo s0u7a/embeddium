@@ -2,7 +2,6 @@ package me.jellysquid.mods.sodium.client.model.quad;
 
 import me.jellysquid.mods.sodium.client.model.quad.properties.ModelQuadFlags;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
-import net.minecraft.core.Direction;
 
 /**
  * Provides a mutable view to a model quad.
@@ -39,9 +38,9 @@ public interface ModelQuadViewMutable extends ModelQuadView {
     void setTexV(int idx, float v);
 
     /**
-     * Sets the light map texture coordinate of the vertex at index {@param idx} to the value {@param light}
+     * Sets the integer-encoded normal vector of the vertex at index {@param idx} to the value {@param light}
      */
-    void setLight(int idx, int light);
+    void setNormal(int idx, int norm);
 
     /**
      * Sets the bit-flag field which contains the {@link ModelQuadFlags} for this quad
@@ -57,11 +56,4 @@ public interface ModelQuadViewMutable extends ModelQuadView {
      * Sets the color index used by this quad
      */
     void setColorIndex(int index);
-
-    /**
-     * Sets the face used by this quad for lighting effects
-     */
-    void setLightFace(Direction face);
-
-    void setHasAmbientOcclusion(boolean hasAmbientOcclusion);
 }

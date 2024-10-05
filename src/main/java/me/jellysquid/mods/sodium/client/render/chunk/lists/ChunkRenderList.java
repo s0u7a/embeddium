@@ -1,107 +1,118 @@
 package me.jellysquid.mods.sodium.client.render.chunk.lists;
 
-import me.jellysquid.mods.sodium.client.render.chunk.RenderSection;
-import me.jellysquid.mods.sodium.client.render.chunk.RenderSectionFlags;
-import me.jellysquid.mods.sodium.client.util.iterator.ByteIterator;
-import me.jellysquid.mods.sodium.client.util.iterator.ReversibleByteArrayIterator;
-import me.jellysquid.mods.sodium.client.util.iterator.ByteArrayIterator;
-import me.jellysquid.mods.sodium.client.render.chunk.region.RenderRegion;
-import org.jetbrains.annotations.Nullable;
+import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 
-public class ChunkRenderList {
-    private final RenderRegion region;
+import java.util.Arrays;
 
-    private final byte[] sectionsWithGeometry = new byte[RenderRegion.REGION_SIZE];
-    private int sectionsWithGeometryCount = 0;
+/**
+ * A simple extension over {@link ObjectArrayList} which provides iterator methods in either FIFO or LIFO ordering.
+ */
+public class ChunkRenderList<T> {
+    private T[] stateArray;
+    private int[] cullArray;
+    private int size, capacity;
 
-    private final byte[] sectionsWithSprites = new byte[RenderRegion.REGION_SIZE];
-    private int sectionsWithSpritesCount = 0;
-
-    private final byte[] sectionsWithEntities = new byte[RenderRegion.REGION_SIZE];
-    private int sectionsWithEntitiesCount = 0;
-
-    private int size;
-
-    private int lastVisibleFrame;
-
-    public ChunkRenderList(RenderRegion region) {
-        this.region = region;
+    public ChunkRenderList() {
+        this(1024);
     }
 
-    public void reset(int frame) {
-        this.sectionsWithGeometryCount = 0;
-        this.sectionsWithSpritesCount = 0;
-        this.sectionsWithEntitiesCount = 0;
+    @SuppressWarnings("unchecked")
+    public ChunkRenderList(int capacity) {
+        this.size = 0;
+        this.capacity = capacity;
+
+        this.stateArray = (T[]) new Object[capacity];
+        this.cullArray = new int[capacity];
+    }
+
+    private void resize() {
+        this.capacity = this.capacity * 2;
+
+        this.stateArray = Arrays.copyOf(this.stateArray, this.capacity);
+        this.cullArray = Arrays.copyOf(this.cullArray, this.capacity);
+    }
+
+    public void add(T state, int cull) {
+        int idx = this.size++;
+
+        if (idx >= this.capacity) {
+            this.resize();
+        }
+
+        this.stateArray[idx] = state;
+        this.cullArray[idx] = cull;
+    }
+
+    public void reset() {
+        if (this.size == 0) {
+            return;
+        }
+
+        for (int i = 0; i < this.size; i++) {
+            this.stateArray[i] = null;
+        }
+
+        for (int i = 0; i < this.size; i++) {
+            this.cullArray[i] = 0;
+        }
 
         this.size = 0;
-        this.lastVisibleFrame = frame;
     }
 
-    public void add(RenderSection render) {
-        if (this.size >= RenderRegion.REGION_SIZE) {
-            throw new ArrayIndexOutOfBoundsException("Render list is full");
+    /**
+     * @return An iterator which returns elements in FIFO order or LIFO order if {@param backwards} is set
+     */
+    public ChunkRenderListIterator<T> iterator(boolean backwards) {
+        if (backwards) {
+            return new ChunkRenderListIterator<T>() {
+                private int pos = ChunkRenderList.this.size - 1;
+
+                @Override
+                public T getGraphicsState() {
+                    return ChunkRenderList.this.stateArray[this.pos];
+                }
+
+                @Override
+                public int getVisibleFaces() {
+                    return ChunkRenderList.this.cullArray[this.pos];
+                }
+
+                @Override
+                public boolean hasNext() {
+                    return this.pos >= 0;
+                }
+
+                @Override
+                public void advance() {
+                    this.pos--;
+                }
+            };
+        } else {
+            return new ChunkRenderListIterator<T>() {
+                private final int lim = ChunkRenderList.this.size;
+
+                private int pos = 0;
+
+                @Override
+                public T getGraphicsState() {
+                    return ChunkRenderList.this.stateArray[this.pos];
+                }
+
+                @Override
+                public int getVisibleFaces() {
+                    return ChunkRenderList.this.cullArray[this.pos];
+                }
+
+                @Override
+                public boolean hasNext() {
+                    return this.pos < this.lim;
+                }
+
+                @Override
+                public void advance() {
+                    this.pos++;
+                }
+            };
         }
-
-        this.size++;
-
-        int index = render.getSectionIndex();
-        int flags = render.getFlags();
-
-        this.sectionsWithGeometry[this.sectionsWithGeometryCount] = (byte) index;
-        this.sectionsWithGeometryCount += (flags >>> RenderSectionFlags.HAS_BLOCK_GEOMETRY) & 1;
-
-        this.sectionsWithSprites[this.sectionsWithSpritesCount] = (byte) index;
-        this.sectionsWithSpritesCount += (flags >>> RenderSectionFlags.HAS_ANIMATED_SPRITES) & 1;
-
-        this.sectionsWithEntities[this.sectionsWithEntitiesCount] = (byte) index;
-        this.sectionsWithEntitiesCount += (flags >>> RenderSectionFlags.HAS_BLOCK_ENTITIES) & 1;
-    }
-
-    public @Nullable ByteIterator sectionsWithGeometryIterator(boolean reverse) {
-        if (this.sectionsWithGeometryCount == 0) {
-            return null;
-        }
-
-        return new ReversibleByteArrayIterator(this.sectionsWithGeometry, this.sectionsWithGeometryCount, reverse);
-    }
-
-    public @Nullable ByteIterator sectionsWithSpritesIterator() {
-        if (this.sectionsWithSpritesCount == 0) {
-            return null;
-        }
-
-        return new ByteArrayIterator(this.sectionsWithSprites, this.sectionsWithSpritesCount);
-    }
-
-    public @Nullable ByteIterator sectionsWithEntitiesIterator() {
-        if (this.sectionsWithEntitiesCount == 0) {
-            return null;
-        }
-
-        return new ByteArrayIterator(this.sectionsWithEntities, this.sectionsWithEntitiesCount);
-    }
-
-    public int getSectionsWithGeometryCount() {
-        return this.sectionsWithGeometryCount;
-    }
-
-    public int getSectionsWithSpritesCount() {
-        return this.sectionsWithSpritesCount;
-    }
-
-    public int getSectionsWithEntitiesCount() {
-        return this.sectionsWithEntitiesCount;
-    }
-
-    public int getLastVisibleFrame() {
-        return this.lastVisibleFrame;
-    }
-
-    public RenderRegion getRegion() {
-        return this.region;
-    }
-
-    public int size() {
-        return this.size;
     }
 }

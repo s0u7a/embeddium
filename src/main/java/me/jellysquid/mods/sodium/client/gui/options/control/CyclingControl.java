@@ -1,25 +1,27 @@
 package me.jellysquid.mods.sodium.client.gui.options.control;
 
-import com.mojang.blaze3d.vertex.PoseStack;
+import me.jellysquid.mods.sodium.client.gui.options.FormattedTextProvider;
 import me.jellysquid.mods.sodium.client.gui.options.Option;
 import me.jellysquid.mods.sodium.client.gui.options.TextProvider;
+import me.jellysquid.mods.sodium.client.gui.options.named.NamedState;
 import me.jellysquid.mods.sodium.client.util.Dim2i;
-import net.minecraft.ChatFormatting;
-import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.network.chat.Component;
-import net.minecraft.network.chat.TextComponent;
+import net.minecraft.util.text.ITextComponent;
+import net.minecraft.util.text.TextComponentString;
+import net.minecraft.util.text.TextComponentTranslation;
 import org.apache.commons.lang3.Validate;
+
+import java.util.Arrays;
 
 public class CyclingControl<T extends Enum<T>> implements Control<T> {
     private final Option<T> option;
     private final T[] allowedValues;
-    private final Component[] names;
+    private final ITextComponent[] names;
 
     public CyclingControl(Option<T> option, Class<T> enumType) {
         this(option, enumType, enumType.getEnumConstants());
     }
 
-    public CyclingControl(Option<T> option, Class<T> enumType, Component[] names) {
+    public CyclingControl(Option<T> option, Class<T> enumType, ITextComponent[] names) {
         T[] universe = enumType.getEnumConstants();
 
         Validate.isTrue(universe.length == names.length, "Mismatch between universe length and names array length");
@@ -30,29 +32,32 @@ public class CyclingControl<T extends Enum<T>> implements Control<T> {
         this.names = names;
     }
 
+    @Deprecated
+    public CyclingControl(Option<T> option, Class<T> enumType, String[] names) {
+        this(option, enumType, Arrays.stream(names).map(TextComponentString::new).toArray(ITextComponent[]::new));
+    }
+
     public CyclingControl(Option<T> option, Class<T> enumType, T[] allowedValues) {
         T[] universe = enumType.getEnumConstants();
 
         this.option = option;
         this.allowedValues = allowedValues;
-        this.names = new Component[universe.length];
+        this.names = new ITextComponent[universe.length];
 
         for (int i = 0; i < this.names.length; i++) {
-            Component name;
+            ITextComponent name;
             T value = universe[i];
 
             if (value instanceof TextProvider) {
-                name = ((TextProvider) value).getLocalizedName();
+                name = new TextComponentString(((TextProvider)value).getLocalizedName());
+            } else if(value instanceof FormattedTextProvider) {
+                name = ((FormattedTextProvider)value).getLocalizedName();
             } else {
-                name = new TextComponent(value.name());
+                name = value instanceof NamedState ? new TextComponentTranslation(((NamedState)value).getKey()) : new TextComponentString(value.name());
             }
 
             this.names[i] = name;
         }
-    }
-
-    public Component[] getNames() {
-        return this.names;
     }
 
     @Override
@@ -72,10 +77,10 @@ public class CyclingControl<T extends Enum<T>> implements Control<T> {
 
     private static class CyclingControlElement<T extends Enum<T>> extends ControlElement<T> {
         private final T[] allowedValues;
-        private final Component[] names;
+        private final ITextComponent[] names;
         private int currentIndex;
 
-        public CyclingControlElement(Option<T> option, Dim2i dim, T[] allowedValues, Component[] names) {
+        public CyclingControlElement(Option<T> option, Dim2i dim, T[] allowedValues, ITextComponent[] names) {
             super(option, dim);
 
             this.allowedValues = allowedValues;
@@ -91,51 +96,27 @@ public class CyclingControl<T extends Enum<T>> implements Control<T> {
         }
 
         @Override
-        public void render(PoseStack drawContext, int mouseX, int mouseY, float delta) {
-            super.render(drawContext, mouseX, mouseY, delta);
+        public void render(int mouseX, int mouseY, float delta) {
+            super.render(mouseX, mouseY, delta);
 
             Enum<T> value = this.option.getValue();
-            Component name = this.names[value.ordinal()];
+            ITextComponent name = this.names[value.ordinal()];
 
-            if(!this.option.isAvailable()) {
-                name = new TextComponent("").append(name).withStyle(ChatFormatting.GRAY, ChatFormatting.STRIKETHROUGH);
-            }
-
-            int strWidth = this.getStringWidth(name);
-            this.drawString(drawContext, name, this.dim.getLimitX() - strWidth - 6, this.dim.getCenterY() - 4, 0xFFFFFFFF);
+            int strWidth = this.getTextWidth(name);
+            this.drawString(name.getFormattedText(), this.dim.getLimitX() - strWidth - 6, this.dim.getCenterY() - 4, 0xFFFFFFFF);
         }
 
         @Override
         public boolean mouseClicked(double mouseX, double mouseY, int button) {
             if (this.option.isAvailable() && button == 0 && this.dim.containsCursor(mouseX, mouseY)) {
-                cycleControl(Screen.hasShiftDown());
+                this.currentIndex = (this.option.getValue().ordinal() + 1) % this.allowedValues.length;
+                this.option.setValue(this.allowedValues[this.currentIndex]);
                 this.playClickSound();
 
                 return true;
             }
 
             return false;
-        }
-
-        @Override
-        public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-            if (!isFocused()) return false;
-
-            if (keySelected(keyCode)) {
-                cycleControl(Screen.hasShiftDown());
-                return true;
-            }
-
-            return false;
-        }
-
-        public void cycleControl(boolean reverse) {
-            if (reverse) {
-                this.currentIndex = (this.currentIndex + this.allowedValues.length - 1) % this.allowedValues.length;
-            } else {
-                this.currentIndex = (this.currentIndex + 1) % this.allowedValues.length;
-            }
-            this.option.setValue(this.allowedValues[this.currentIndex]);
         }
     }
 }

@@ -1,10 +1,8 @@
 package me.jellysquid.mods.sodium.client.model.quad;
 
-import static me.jellysquid.mods.sodium.client.util.ModelQuadUtil.*;
-
-import me.jellysquid.mods.sodium.client.util.ModelQuadUtil;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
-import net.minecraft.core.Direction;
+
+import static me.jellysquid.mods.sodium.client.util.ModelQuadUtil.*;
 
 /**
  * A simple implementation of the {@link ModelQuadViewMutable} interface which can provide an on-heap scratch area
@@ -16,9 +14,6 @@ public class ModelQuad implements ModelQuadViewMutable {
 
     private TextureAtlasSprite sprite;
     private int colorIdx;
-    private Direction direction;
-
-    private boolean hasAmbientOcclusion = true;
 
     @Override
     public void setX(int idx, float x) {
@@ -51,8 +46,8 @@ public class ModelQuad implements ModelQuadViewMutable {
     }
 
     @Override
-    public void setLight(int idx, int light) {
-        this.data[vertexOffset(idx) + LIGHT_INDEX] = light;
+    public void setNormal(int idx, int norm) {
+        this.data[vertexOffset(idx) + NORMAL_INDEX] = norm;
     }
 
     @Override
@@ -71,13 +66,8 @@ public class ModelQuad implements ModelQuadViewMutable {
     }
 
     @Override
-    public void setLightFace(Direction face) {
-        this.direction = face;
-    }
-
-    @Override
-    public void setHasAmbientOcclusion(boolean hasAmbientOcclusion) {
-        this.hasAmbientOcclusion = hasAmbientOcclusion;
+    public int getNormal(int idx) {
+        return this.data[vertexOffset(idx) + NORMAL_INDEX];
     }
 
     @Override
@@ -102,7 +92,12 @@ public class ModelQuad implements ModelQuadViewMutable {
 
     @Override
     public int getColor(int idx) {
-        return this.data[vertexOffset(idx) + COLOR_INDEX];
+    	if(vertexOffset(idx) + COLOR_INDEX < data.length) {
+            return this.data[vertexOffset(idx) + COLOR_INDEX];
+        }
+        else {
+            return data.length;
+        }
     }
 
     @Override
@@ -116,37 +111,13 @@ public class ModelQuad implements ModelQuadViewMutable {
     }
 
     @Override
-    public int getLight(int idx) {
-        return this.data[vertexOffset(idx) + LIGHT_INDEX];
-    }
-
-    @Override
-    public int getForgeNormal(int idx) {
-        return this.data[vertexOffset(idx) + NORMAL_INDEX];
-    }
-
-    @Override
-    public int getComputedFaceNormal() {
-        return ModelQuadUtil.calculateNormal(this);
-    }
-
-    @Override
     public int getFlags() {
         return this.flags;
     }
 
     @Override
-    public TextureAtlasSprite getSprite() {
+    public TextureAtlasSprite rubidium$getSprite() {
         return this.sprite;
     }
 
-    @Override
-    public Direction getLightFace() {
-        return this.direction;
-    }
-
-    @Override
-    public boolean hasAmbientOcclusion() {
-        return this.hasAmbientOcclusion;
-    }
 }

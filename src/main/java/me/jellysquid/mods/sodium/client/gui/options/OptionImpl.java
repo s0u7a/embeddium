@@ -4,21 +4,17 @@ import me.jellysquid.mods.sodium.client.gui.options.binding.GenericBinding;
 import me.jellysquid.mods.sodium.client.gui.options.binding.OptionBinding;
 import me.jellysquid.mods.sodium.client.gui.options.control.Control;
 import me.jellysquid.mods.sodium.client.gui.options.storage.OptionStorage;
-import net.minecraft.network.chat.Component;
-import net.minecraft.network.chat.TranslatableComponent;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.text.ITextComponent;
+import net.minecraft.util.text.TextComponentString;
 import org.apache.commons.lang3.Validate;
-import org.embeddedt.embeddium.client.gui.options.OptionIdentifier;
 
 import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.function.BiConsumer;
-import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
 public class OptionImpl<S, T> implements Option<T> {
-
     private final OptionStorage<S> storage;
 
     private final OptionBinding<S, T> binding;
@@ -26,27 +22,24 @@ public class OptionImpl<S, T> implements Option<T> {
 
     private final EnumSet<OptionFlag> flags;
 
-    private final OptionIdentifier<T> id;
-    private final Component name;
-    private final Component tooltip;
+    private final ITextComponent name;
+    private final ITextComponent tooltip;
 
     private final OptionImpact impact;
 
     private T value;
     private T modifiedValue;
 
-    private final BooleanSupplier enabled;
+    private final boolean enabled;
 
     private OptionImpl(OptionStorage<S> storage,
-                       OptionIdentifier<T> id,
-                       Component name,
-                       Component tooltip,
+                       ITextComponent name,
+                       ITextComponent tooltip,
                        OptionBinding<S, T> binding,
                        Function<OptionImpl<S, T>, Control<T>> control,
                        EnumSet<OptionFlag> flags,
                        OptionImpact impact,
-                       BooleanSupplier enabled) {
-        this.id = id;
+                       boolean enabled) {
         this.storage = storage;
         this.name = name;
         this.tooltip = tooltip;
@@ -60,17 +53,17 @@ public class OptionImpl<S, T> implements Option<T> {
     }
 
     @Override
-    public OptionIdentifier<T> getId() {
-        return id;
-    }
-
-    @Override
-    public Component getName() {
+    public ITextComponent getNewName() {
         return this.name;
     }
 
     @Override
-    public Component getTooltip() {
+    public String getName() {
+        return this.getNewName().getFormattedText();
+    }
+
+    @Override
+    public ITextComponent getTooltip() {
         return this.tooltip;
     }
 
@@ -107,7 +100,7 @@ public class OptionImpl<S, T> implements Option<T> {
 
     @Override
     public boolean isAvailable() {
-        return this.enabled.getAsBoolean();
+        return this.enabled;
     }
 
     @Override
@@ -126,45 +119,25 @@ public class OptionImpl<S, T> implements Option<T> {
         return this.flags;
     }
 
-    public static <S, T> OptionImpl.Builder<S, T> createBuilder(@SuppressWarnings("unused") Class<T> type, OptionStorage<S> storage) {
-        return new Builder<>(storage, type);
+    public static <S, T> OptionImpl.Builder<S, T> createBuilder(Class<T> type, OptionStorage<S> storage) {
+        return new Builder<>(storage);
     }
 
     public static class Builder<S, T> {
         private final OptionStorage<S> storage;
-        private final Class<T> type;
-        private OptionIdentifier<T> id;
-        private Component name;
-        private Component tooltip;
+        private ITextComponent name;
+        private ITextComponent tooltip;
         private OptionBinding<S, T> binding;
         private Function<OptionImpl<S, T>, Control<T>> control;
         private OptionImpact impact;
         private final EnumSet<OptionFlag> flags = EnumSet.noneOf(OptionFlag.class);
-        private static final BooleanSupplier ALWAYS_ENABLED = () -> true;
-        private static final BooleanSupplier ALWAYS_DISABLED = () -> false;
-        private BooleanSupplier enabled = ALWAYS_ENABLED;
+        private boolean enabled = true;
 
-        private Builder(OptionStorage<S> storage, Class<T> type) {
+        private Builder(OptionStorage<S> storage) {
             this.storage = storage;
-            this.type = type;
         }
 
-        public Builder<S, T> setId(ResourceLocation id) {
-            Validate.notNull(id, "Id must not be null");
-
-            this.id = OptionIdentifier.create(id.getNamespace(), id.getPath(), this.type);
-            return this;
-        }
-
-        public Builder<S, T> setId(OptionIdentifier<T> id) {
-            Validate.notNull(id, "Id must not be null");
-
-            this.id = id;
-
-            return this;
-        }
-
-        public Builder<S, T> setName(Component name) {
+        public Builder<S, T> setName(ITextComponent name) {
             Validate.notNull(name, "Argument must not be null");
 
             this.name = name;
@@ -172,12 +145,20 @@ public class OptionImpl<S, T> implements Option<T> {
             return this;
         }
 
-        public Builder<S, T> setTooltip(Component tooltip) {
+        public Builder<S, T> setName(String name) {
+            return setName(new TextComponentString(name));
+        }
+
+        public Builder<S, T> setTooltip(ITextComponent tooltip) {
             Validate.notNull(tooltip, "Argument must not be null");
 
             this.tooltip = tooltip;
 
             return this;
+        }
+
+        public Builder<S, T> setTooltip(String tooltip) {
+            return setTooltip(new TextComponentString(tooltip));
         }
 
         public Builder<S, T> setBinding(BiConsumer<S, T> setter, Function<S, T> getter) {
@@ -212,14 +193,8 @@ public class OptionImpl<S, T> implements Option<T> {
             return this;
         }
 
-        public Builder<S, T> setEnabledPredicate(BooleanSupplier value) {
-            this.enabled = value;
-
-            return this;
-        }
-
         public Builder<S, T> setEnabled(boolean value) {
-            setEnabledPredicate(value ? ALWAYS_ENABLED : ALWAYS_DISABLED);
+            this.enabled = value;
 
             return this;
         }
@@ -231,27 +206,12 @@ public class OptionImpl<S, T> implements Option<T> {
         }
 
         public OptionImpl<S, T> build() {
-            if (this.id == null) {
-                // FIXME enforce IDs and make nullable
-                this.id = (OptionIdentifier<T>)OptionIdentifier.EMPTY;
-                //SodiumClientMod.logger().warn("Id must be specified in option '{}', this might throw a exception on a future release", this.name.getString());
-            } else {
-                if (this.name == null) {
-                    this.name = new TranslatableComponent(this.id.getModId() + ".options." + this.id.getPath() + ".name");
-                }
-
-                if (this.tooltip == null) {
-                    this.tooltip = new TranslatableComponent(this.id.getModId() + ".options." + this.id.getPath() + ".tooltip");
-                }
-            }
-
-            Validate.notNull(this.name, "Name must be specified or inferred from a specified ID");
-            Validate.notNull(this.tooltip, "Tooltip must be specified or inferred from a specified ID");
+            Validate.notNull(this.name, "Name must be specified");
+            Validate.notNull(this.tooltip, "Tooltip must be specified");
             Validate.notNull(this.binding, "Option binding must be specified");
             Validate.notNull(this.control, "Control must be specified");
 
-            OptionImpl<S, T> impl = new OptionImpl<>(this.storage, this.id, this.name, this.tooltip, this.binding, this.control, this.flags, this.impact, this.enabled);
-            return impl;
+            return new OptionImpl<>(this.storage, this.name, this.tooltip, this.binding, this.control, this.flags, this.impact, this.enabled);
         }
     }
 }

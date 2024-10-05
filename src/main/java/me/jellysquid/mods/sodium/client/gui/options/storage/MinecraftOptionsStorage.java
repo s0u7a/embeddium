@@ -2,23 +2,23 @@ package me.jellysquid.mods.sodium.client.gui.options.storage;
 
 import me.jellysquid.mods.sodium.client.SodiumClientMod;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.Options;
+import net.minecraft.client.settings.GameSettings;
 
-public class MinecraftOptionsStorage implements OptionStorage<Options> {
+public class MinecraftOptionsStorage implements OptionStorage<GameSettings> {
     private final Minecraft client;
 
     public MinecraftOptionsStorage() {
-        this.client = Minecraft.getInstance();
+        this.client = Minecraft.getMinecraft();
     }
 
     @Override
-    public Options getData() {
-        return this.client.options;
+    public GameSettings getData() {
+        return this.client.gameSettings;
     }
 
     @Override
     public void save() {
-        this.getData().save();
+        this.getData().saveOptions();
 
         SodiumClientMod.logger().info("Flushed changes to Minecraft configuration");
     }

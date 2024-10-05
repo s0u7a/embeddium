@@ -1,129 +1,120 @@
 package me.jellysquid.mods.sodium.client.world;
 
-import it.unimi.dsi.fastutil.ints.Int2ReferenceMap;
-import me.jellysquid.mods.sodium.client.world.biome.*;
+import it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap;
+import me.jellysquid.mods.sodium.client.util.math.ChunkSectionPos;
+import me.jellysquid.mods.sodium.client.world.biome.BiomeColorCache;
 import me.jellysquid.mods.sodium.client.world.cloned.ChunkRenderContext;
 import me.jellysquid.mods.sodium.client.world.cloned.ClonedChunkSection;
 import me.jellysquid.mods.sodium.client.world.cloned.ClonedChunkSectionCache;
-import me.jellysquid.mods.sodium.mixin.core.world.biome.BiomeManagerAccessor;
-import net.fabricmc.fabric.api.rendering.data.v1.RenderAttachedBlockView;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.multiplayer.ClientLevel;
-import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
-import net.minecraft.core.SectionPos;
-import net.minecraft.util.Mth;
-import net.minecraft.world.level.BlockAndTintGetter;
-import net.minecraft.world.level.ColorResolver;
-import net.minecraft.world.level.Level;
-import net.minecraft.world.level.LightLayer;
-import net.minecraft.world.level.biome.Biome;
-import net.minecraft.world.level.biome.FuzzyOffsetConstantColumnBiomeZoomer;
-import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.entity.BlockEntity;
-import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.chunk.DataLayer;
-import net.minecraft.world.level.chunk.LevelChunk;
-import net.minecraft.world.level.chunk.LevelChunkSection;
-import net.minecraft.world.level.levelgen.structure.BoundingBox;
-import net.minecraft.world.level.lighting.LevelLightEngine;
-import net.minecraft.world.level.material.FluidState;
-import org.embeddedt.embeddium.api.ChunkMeshEvent;
-import org.embeddedt.embeddium.api.MeshAppender;
-import org.embeddedt.embeddium.asm.OptionalInterface;
-import org.jetbrains.annotations.Nullable;
-import org.jetbrains.annotations.UnknownNullability;
+import net.minecraft.block.state.IBlockState;
+import net.minecraft.init.Biomes;
+import net.minecraft.init.Blocks;
+import net.minecraft.tileentity.TileEntity;
+import net.minecraft.util.EnumFacing;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.MathHelper;
+import net.minecraft.world.EnumSkyBlock;
+import net.minecraft.world.IBlockAccess;
+import net.minecraft.world.World;
+import net.minecraft.world.WorldType;
+import net.minecraft.world.biome.Biome;
+import net.minecraft.world.biome.BiomeColorHelper;
+import net.minecraft.world.chunk.Chunk;
+import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
+import net.minecraft.world.gen.structure.StructureBoundingBox;
+import net.minecraftforge.client.model.pipeline.LightUtil;
 
 import java.util.Arrays;
-import java.util.List;
-import java.util.Objects;
+import java.util.Map;
 
 /**
- * <p>Takes a slice of world state (block states, biome and light data arrays) and copies the data for use in off-thread
+ * Takes a slice of world state (block states, biome and light data arrays) and copies the data for use in off-thread
  * operations. This allows chunk build tasks to see a consistent snapshot of chunk data at the exact moment the task was
- * created.</p>
+ * created.
  *
- * <p>World slices are not safe to use from multiple threads at once, but the data they contain is safe from modification
- * by the main client thread.</p>
+ * World slices are not safe to use from multiple threads at once, but the data they contain is safe from modification
+ * by the main client thread.
  *
- * <p>Object pooling should be used to avoid huge allocations as this class contains many large arrays.</p>
+ * Object pooling should be used to avoid huge allocations as this class contains many large arrays.
  */
-@OptionalInterface({ RenderAttachedBlockView.class })
-public class WorldSlice implements BlockAndTintGetter, BiomeColorView, RenderAttachedBlockView {
-    private static final LightLayer[] LIGHT_TYPES = LightLayer.values();
+public class WorldSlice implements SodiumBlockAccess {
+    // The number of blocks on each axis in a section.
+    private static final int SECTION_BLOCK_LENGTH = 16;
 
     // The number of blocks in a section.
-    private static final int SECTION_BLOCK_COUNT = 16 * 16 * 16;
+    private static final int SECTION_BLOCK_COUNT = SECTION_BLOCK_LENGTH * SECTION_BLOCK_LENGTH * SECTION_BLOCK_LENGTH;
 
     // The radius of blocks around the origin chunk that should be copied.
     private static final int NEIGHBOR_BLOCK_RADIUS = 2;
 
     // The radius of chunks around the origin chunk that should be copied.
-    private static final int NEIGHBOR_CHUNK_RADIUS = 1; // TODO //Mth.roundToward(NEIGHBOR_BLOCK_RADIUS, 16) >> 4;
+    private static final int NEIGHBOR_CHUNK_RADIUS = MathHelper.roundUp(NEIGHBOR_BLOCK_RADIUS, 16) >> 4;
 
     // The number of sections on each axis of this slice.
-    private static final int SECTION_ARRAY_LENGTH = 1 + (NEIGHBOR_CHUNK_RADIUS * 2);
+    private static final int SECTION_LENGTH = 1 + (NEIGHBOR_CHUNK_RADIUS * 2);
 
-    // The size of the (Local Section -> Resource) arrays.
-    private static final int SECTION_ARRAY_SIZE = SECTION_ARRAY_LENGTH * SECTION_ARRAY_LENGTH * SECTION_ARRAY_LENGTH;
+    // The size of the lookup tables used for mapping values to coordinate int pairs. The lookup table size is always
+    // a power of two so that multiplications can be replaced with simple bit shifts in hot code paths.
+    private static final int TABLE_LENGTH = MathHelper.smallestEncompassingPowerOfTwo(SECTION_LENGTH);
 
-    // The number of blocks on each axis of this slice.
-    private static final int BLOCK_ARRAY_LENGTH = SECTION_ARRAY_LENGTH * 16;
+    // The number of bits needed for each X/Y/Z component in a lookup table.
+    private static final int TABLE_BITS = Integer.bitCount(TABLE_LENGTH - 1);
 
-    // The number of bits needed for each local X/Y/Z coordinate.
-    private static final int LOCAL_XYZ_BITS = 4;
-
-    // The default block state used for out-of-bounds access
-    private static final BlockState EMPTY_BLOCK_STATE = Blocks.AIR.defaultBlockState();
+    // The array size for the section lookup table.
+    private static final int SECTION_TABLE_ARRAY_SIZE = TABLE_LENGTH * TABLE_LENGTH * TABLE_LENGTH;
 
     // The world this slice has copied data from
-    public final ClientLevel world;
+    private final World world;
+    private WorldType worldType;
+    private final int defaultSkyLightValue;
 
-    // The accessor used for fetching biome data from the slice
-    private final BiomeSlice biomeSlice;
 
-    // The biome blend cache
-    private final BiomeColorCache biomeColors;
+    // Local Section->BlockState table.
+    private final IBlockState[][] blockStatesArrays;
 
-    // (Local Section -> Block States) table.
-    private final BlockState[][] blockArrays;
+    // Local section copies. Read-only.
+    private ClonedChunkSection[] sections;
 
-    // (Local Section -> Light Arrays) table.
-    private final @Nullable DataLayer[][] lightArrays;
+    // Biome caches for each chunk section
+    private Biome[][] biomeCaches;
 
-    // (Local Section -> Block Entity) table.
-    private final @Nullable Int2ReferenceMap<BlockEntity>[] blockEntityArrays;
+    // The biome blend caches for each color resolver type
+    // This map is always re-initialized, but the caches themselves are taken from an object pool
+    private final Map<BiomeColorHelper.ColorResolver, BiomeColorCache> biomeColorCaches = new Reference2ObjectOpenHashMap<>();
 
-    // (Local Section -> Block Entity Render Data) table.
-    private final @Nullable Int2ReferenceMap<Object>[] blockEntityRenderDataArrays;
+    // The previously accessed and cached color resolver, used in conjunction with the cached color cache field
+    private BiomeColorHelper.ColorResolver prevColorResolver;
+
+    // The cached lookup result for the previously accessed color resolver to avoid excess hash table accesses
+    // for vertex color blending
+    private BiomeColorCache prevColorCache;
 
     // The starting point from which this slice captures blocks
-    private int originX, originY, originZ;
-    
-    // The volume that this WorldSlice contains
-    private BoundingBox volume;
+    private int baseX, baseY, baseZ;
 
-    public static ChunkRenderContext prepare(Level world, SectionPos origin, ClonedChunkSectionCache sectionCache) {
-        LevelChunk chunk = world.getChunk(origin.getX(), origin.getZ());
-        var sectionArray = chunk.getSections();
-        LevelChunkSection section = origin.getY() >= 0 && origin.getY() < sectionArray.length ? sectionArray[origin.getY()] : LevelChunk.EMPTY_SECTION;
+    // The chunk origin of this slice
+    private ChunkSectionPos origin;
+
+    // The volume that this slice contains
+    private StructureBoundingBox volume;
+
+    public static ChunkRenderContext prepare(World world, ChunkSectionPos origin, ClonedChunkSectionCache sectionCache) {
+        Chunk chunk = world.getChunk(origin.getX(), origin.getZ());
+        ExtendedBlockStorage section = chunk.getBlockStorageArray()[origin.getY()];
 
         // If the chunk section is absent or empty, simply terminate now. There will never be anything in this chunk
         // section to render, so we need to signal that a chunk render task shouldn't created. This saves a considerable
         // amount of time in queueing instant build tasks and greatly accelerates how quickly the world can be loaded.
-        List<MeshAppender> meshAppenders = ChunkMeshEvent.post(world, origin);
-        boolean isEmpty = LevelChunkSection.isEmpty(section) && meshAppenders.isEmpty();
-
-        if (isEmpty) {
+        if (section == null || section.isEmpty()) {
             return null;
         }
 
-        BoundingBox volume = new BoundingBox(origin.minBlockX() - NEIGHBOR_BLOCK_RADIUS,
-                origin.minBlockY() - NEIGHBOR_BLOCK_RADIUS,
-                origin.minBlockZ() - NEIGHBOR_BLOCK_RADIUS,
-                origin.maxBlockX() + NEIGHBOR_BLOCK_RADIUS,
-                origin.maxBlockY() + NEIGHBOR_BLOCK_RADIUS,
-                origin.maxBlockZ() + NEIGHBOR_BLOCK_RADIUS);
+        StructureBoundingBox volume = new StructureBoundingBox(origin.getMinX() - NEIGHBOR_BLOCK_RADIUS,
+                origin.getMinY() - NEIGHBOR_BLOCK_RADIUS,
+                origin.getMinZ() - NEIGHBOR_BLOCK_RADIUS,
+                origin.getMaxX() + NEIGHBOR_BLOCK_RADIUS,
+                origin.getMaxY() + NEIGHBOR_BLOCK_RADIUS,
+                origin.getMaxZ() + NEIGHBOR_BLOCK_RADIUS);
 
         // The min/max bounds of the chunks copied by this slice
         final int minChunkX = origin.getX() - NEIGHBOR_CHUNK_RADIUS;
@@ -134,7 +125,7 @@ public class WorldSlice implements BlockAndTintGetter, BiomeColorView, RenderAtt
         final int maxChunkY = origin.getY() + NEIGHBOR_CHUNK_RADIUS;
         final int maxChunkZ = origin.getZ() + NEIGHBOR_CHUNK_RADIUS;
 
-        ClonedChunkSection[] sections = new ClonedChunkSection[SECTION_ARRAY_SIZE];
+        ClonedChunkSection[] sections = new ClonedChunkSection[SECTION_TABLE_ARRAY_SIZE];
 
         for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
             for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
@@ -145,246 +136,327 @@ public class WorldSlice implements BlockAndTintGetter, BiomeColorView, RenderAtt
             }
         }
 
-        return new ChunkRenderContext(origin, sections, volume).withMeshAppenders(meshAppenders);
+        return new ChunkRenderContext(origin, sections, volume);
     }
 
-    @SuppressWarnings("unchecked")
-    public WorldSlice(ClientLevel world) {
+    public WorldSlice(World world) {
         this.world = world;
+        this.worldType = world.getWorldType();
+        this.defaultSkyLightValue = this.world.provider.hasSkyLight() ? EnumSkyBlock.SKY.defaultLightValue : 0;
 
-        this.blockArrays = new BlockState[SECTION_ARRAY_SIZE][SECTION_BLOCK_COUNT];
-        this.lightArrays = new DataLayer[SECTION_ARRAY_SIZE][LIGHT_TYPES.length];
+        this.sections = new ClonedChunkSection[SECTION_TABLE_ARRAY_SIZE];
+        this.blockStatesArrays = new IBlockState[SECTION_TABLE_ARRAY_SIZE][];
+        this.biomeCaches = new Biome[SECTION_TABLE_ARRAY_SIZE][16 * 16];
 
-        this.blockEntityArrays = new Int2ReferenceMap[SECTION_ARRAY_SIZE];
-        this.blockEntityRenderDataArrays = new Int2ReferenceMap[SECTION_ARRAY_SIZE];
+        for (int x = 0; x < SECTION_LENGTH; x++) {
+            for (int y = 0; y < SECTION_LENGTH; y++) {
+                for (int z = 0; z < SECTION_LENGTH; z++) {
+                    int i = getLocalSectionIndex(x, y, z);
 
-        boolean is3DBiomes = ((BiomeManagerAccessor)this.world.getBiomeManager()).getZoomer() != FuzzyOffsetConstantColumnBiomeZoomer.INSTANCE;
-        this.biomeSlice = new BiomeSlice(is3DBiomes);
-        this.biomeColors = new BiomeColorCache(this.biomeSlice, Minecraft.getInstance().options.biomeBlendRadius, is3DBiomes);
-
-        for (BlockState[] blockArray : this.blockArrays) {
-            Arrays.fill(blockArray, EMPTY_BLOCK_STATE);
+                    this.blockStatesArrays[i] = new IBlockState[SECTION_BLOCK_COUNT];
+                    Arrays.fill(this.blockStatesArrays[i], Blocks.AIR.getDefaultState());
+                }
+            }
         }
     }
 
     public void copyData(ChunkRenderContext context) {
-        this.originX = (context.getOrigin().getX() - NEIGHBOR_CHUNK_RADIUS) << 4;
-        this.originY = (context.getOrigin().getY() - NEIGHBOR_CHUNK_RADIUS) << 4;
-        this.originZ = (context.getOrigin().getZ() - NEIGHBOR_CHUNK_RADIUS) << 4;
+        this.origin = context.getOrigin();
+        this.sections = context.getSections();
         this.volume = context.getVolume();
 
-        for (int x = 0; x < SECTION_ARRAY_LENGTH; x++) {
-            for (int y = 0; y < SECTION_ARRAY_LENGTH; y++) {
-                for (int z = 0; z < SECTION_ARRAY_LENGTH; z++) {
-                    this.copySectionData(context, getLocalSectionIndex(x, y, z));
+        this.prevColorCache = null;
+        this.prevColorResolver = null;
+
+        this.biomeColorCaches.clear();
+
+        this.baseX = (this.origin.getX() - NEIGHBOR_CHUNK_RADIUS) << 4;
+        this.baseY = (this.origin.getY() - NEIGHBOR_CHUNK_RADIUS) << 4;
+        this.baseZ = (this.origin.getZ() - NEIGHBOR_CHUNK_RADIUS) << 4;
+
+        for (int x = 0; x < SECTION_LENGTH; x++) {
+            for (int y = 0; y < SECTION_LENGTH; y++) {
+                for (int z = 0; z < SECTION_LENGTH; z++) {
+                    int idx = getLocalSectionIndex(x, y, z);
+
+                    ClonedChunkSection section = this.sections[idx];
+
+                    this.biomeCaches[idx] = section.getBiomeData();
+
+                    this.unpackBlockData(this.blockStatesArrays[idx], section, context.getVolume());
                 }
             }
         }
-
-        this.biomeSlice.update(this.world, context);
-        this.biomeColors.update(context);
     }
 
-    private void copySectionData(ChunkRenderContext context, int sectionIndex) {
-        var section = context.getSections()[sectionIndex];
-
-        Objects.requireNonNull(section, "Chunk section must be non-null");
-
-        try {
-            this.unpackBlockData(this.blockArrays[sectionIndex], context, section);
-        } catch(RuntimeException e) {
-            throw new IllegalStateException("Exception copying block data for section: " + section.getPosition(), e);
-        }
-
-        this.lightArrays[sectionIndex][LightLayer.BLOCK.ordinal()] = section.getLightArray(LightLayer.BLOCK);
-        this.lightArrays[sectionIndex][LightLayer.SKY.ordinal()] = section.getLightArray(LightLayer.SKY);
-
-        this.blockEntityArrays[sectionIndex] = section.getBlockEntityMap();
-        this.blockEntityRenderDataArrays[sectionIndex] = section.getBlockEntityRenderDataMap();
-    }
-
-    private void unpackBlockData(BlockState[] blockArray, ChunkRenderContext context, ClonedChunkSection section) {
-        if (section.getBlockData() == null) {
-            Arrays.fill(blockArray, EMPTY_BLOCK_STATE);
-            return;
-        }
-
-        var container = ReadableContainerExtended.of(section.getBlockData());
-
-        SectionPos origin = context.getOrigin();
-        SectionPos pos = section.getPosition();
-
-        if (origin.equals(pos))  {
-            container.sodium$unpack(blockArray);
+    private void unpackBlockData(IBlockState[] states, ClonedChunkSection section, StructureBoundingBox box) {
+        if (this.origin.equals(section.getPosition()))  {
+            this.unpackBlockDataZ(states, section);
         } else {
-            var bounds = context.getVolume();
-
-            int minBlockX = Math.max(bounds.x0, pos.minBlockX());
-            int maxBlockX = Math.min(bounds.x1, pos.maxBlockX());
-
-            int minBlockY = Math.max(bounds.y0, pos.minBlockY());
-            int maxBlockY = Math.min(bounds.y1, pos.maxBlockY());
-
-            int minBlockZ = Math.max(bounds.z0, pos.minBlockZ());
-            int maxBlockZ = Math.min(bounds.z1, pos.maxBlockZ());
-
-            container.sodium$unpack(blockArray, minBlockX & 15, minBlockY & 15, minBlockZ & 15,
-                    maxBlockX & 15, maxBlockY & 15, maxBlockZ & 15);
+            this.unpackBlockDataR(states, section, box);
         }
     }
 
-    public void reset() {
-        // erase any pointers to resources we no longer need
-        // no point in cleaning the pre-allocated arrays (such as block state storage) since we hold the
-        // only reference.
-        for (int sectionIndex = 0; sectionIndex < SECTION_ARRAY_LENGTH; sectionIndex++) {
-            Arrays.fill(this.lightArrays[sectionIndex], null);
-
-            this.blockEntityArrays[sectionIndex] = null;
+    private static void copyBlocks(IBlockState[] blocks, ClonedChunkSection section, int minBlockY, int maxBlockY, int minBlockZ, int maxBlockZ, int minBlockX, int maxBlockX) {
+        for (int y = minBlockY; y <= maxBlockY; y++) {
+            for (int z = minBlockZ; z <= maxBlockZ; z++) {
+                for (int x = minBlockX; x <= maxBlockX; x++) {
+                    final int blockIdx = getLocalBlockIndex(x & 15, y & 15, z & 15);
+                    blocks[blockIdx] = section.getBlockState(x & 15, y & 15, z & 15);
+                }
+            }
         }
+    }
+
+    private void unpackBlockDataR(IBlockState[] states, ClonedChunkSection section, StructureBoundingBox box) {
+        ChunkSectionPos pos = section.getPosition();
+
+        int minBlockX = Math.max(box.minX, pos.getMinX());
+        int maxBlockX = Math.min(box.maxX, pos.getMaxX());
+
+        int minBlockY = Math.max(box.minY, pos.getMinY());
+        int maxBlockY = Math.min(box.maxY, pos.getMaxY());
+
+        int minBlockZ = Math.max(box.minZ, pos.getMinZ());
+        int maxBlockZ = Math.min(box.maxZ, pos.getMaxZ());
+
+        copyBlocks(states, section, minBlockY, maxBlockY, minBlockZ, maxBlockZ, minBlockX, maxBlockX);
+    }
+
+    private void unpackBlockDataZ(IBlockState[] states, ClonedChunkSection section) {
+        // TODO: Look into a faster copy for this?
+        final ChunkSectionPos pos = section.getPosition();
+
+        final int minBlockX = pos.getMinX();
+        final int maxBlockX = pos.getMaxX();
+
+        final int minBlockY = pos.getMinY();
+        final int maxBlockY = pos.getMaxY();
+
+        final int minBlockZ = pos.getMinZ();
+        final int maxBlockZ = pos.getMaxZ();
+
+        // TODO: Can this be optimized?
+        copyBlocks(states, section, minBlockY, maxBlockY, minBlockZ, maxBlockZ, minBlockX, maxBlockX);
+    }
+
+    private static boolean blockBoxContains(StructureBoundingBox box, int x, int y, int z) {
+        return x >= box.minX &&
+                x <= box.maxX &&
+                y >= box.minY &&
+                y <= box.maxY &&
+                z >= box.minZ &&
+                z <= box.maxZ;
     }
 
     @Override
-    public BlockState getBlockState(BlockPos pos) {
+    public IBlockState getBlockState(BlockPos pos) {
         return this.getBlockState(pos.getX(), pos.getY(), pos.getZ());
     }
 
-    public BlockState getBlockState(int x, int y, int z) {
-        int relX = x - this.originX;
-        int relY = y - this.originY;
-        int relZ = z - this.originZ;
+    @Override
+    public boolean isAirBlock(BlockPos pos) {
+        IBlockState state = this.getBlockState(pos);
+        return state.getBlock().isAir(state, this, pos);
+    }
 
-        if (!isInside(relX, relY, relZ)) {
-            return EMPTY_BLOCK_STATE;
+    public IBlockState getBlockState(int x, int y, int z) {
+        if (!blockBoxContains(this.volume, x, y, z)) {
+            return Blocks.AIR.getDefaultState();
         }
 
-        return this.blockArrays[getLocalSectionIndex(relX >> 4, relY >> 4, relZ >> 4)]
+        int relX = x - this.baseX;
+        int relY = y - this.baseY;
+        int relZ = z - this.baseZ;
+
+        return this.blockStatesArrays[getLocalSectionIndex(relX >> 4, relY >> 4, relZ >> 4)]
                 [getLocalBlockIndex(relX & 15, relY & 15, relZ & 15)];
     }
 
-    @Override
-    public FluidState getFluidState(BlockPos pos) {
-        return this.getBlockState(pos)
-                .getFluidState();
+    public IBlockState getBlockStateRelative(int x, int y, int z) {
+        // NOTE: Not bounds checked. We assume ChunkRenderRebuildTask is the only function using this
+        return this.blockStatesArrays[getLocalSectionIndex(x >> 4, y >> 4, z >> 4)]
+                [getLocalBlockIndex(x & 15, y & 15, z & 15)];
     }
 
     @Override
-    public float getShade(Direction direction, boolean shaded) {
-        return this.world.getShade(direction, shaded);
-    }
-
-    @Override
-    public LevelLightEngine getLightEngine() {
-        // Not thread-safe to access lighting data from off-thread, even if Minecraft allows it.
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public int getBrightness(LightLayer type, BlockPos pos) {
-        int relX = pos.getX() - this.originX;
-        int relY = pos.getY() - this.originY;
-        int relZ = pos.getZ() - this.originZ;
-
-        if (!isInside(relX, relY, relZ)) {
-            return 0;
-        }
-
-        var lightArray = this.lightArrays[getLocalSectionIndex(relX >> 4, relY >> 4, relZ >> 4)][type.ordinal()];
-
-        if (lightArray == null) {
-            // If the array is null, it means the dimension for the current world does not support that light type
-            return 0;
-        }
-
-        return lightArray.get(relX & 15, relY & 15, relZ & 15);
-    }
-
-    @Override
-    public int getRawBrightness(BlockPos pos, int ambientDarkness) {
-        int relX = pos.getX() - this.originX;
-        int relY = pos.getY() - this.originY;
-        int relZ = pos.getZ() - this.originZ;
-
-        if (!isInside(relX, relY, relZ)) {
-            return 0;
-        }
-
-        var lightArrays = this.lightArrays[getLocalSectionIndex(relX >> 4, relY >> 4, relZ >> 4)];
-
-        var skyLightArray = lightArrays[LightLayer.SKY.ordinal()];
-        var blockLightArray = lightArrays[LightLayer.BLOCK.ordinal()];
-
-        int localX = relX & 15;
-        int localY = relY & 15;
-        int localZ = relZ & 15;
-
-        int skyLight = skyLightArray == null ? 0 : skyLightArray.get(localX, localY, localZ) - ambientDarkness;
-        int blockLight = blockLightArray == null ? 0 : blockLightArray.get(localX, localY, localZ);
-
-        return Math.max(blockLight, skyLight);
-    }
-
-    @Override
-    public BlockEntity getBlockEntity(BlockPos pos) {
+    public TileEntity getTileEntity(BlockPos pos) {
         return this.getBlockEntity(pos.getX(), pos.getY(), pos.getZ());
     }
 
-    public BlockEntity getBlockEntity(int x, int y, int z) {
-        int relX = x - this.originX;
-        int relY = y - this.originY;
-        int relZ = z - this.originZ;
-
-        if (!isInside(relX, relY, relZ)) {
+    public TileEntity getBlockEntity(int x, int y, int z) {
+        if (!blockBoxContains(this.volume, x, y, z)) {
             return null;
         }
 
-        var blockEntities = this.blockEntityArrays[getLocalSectionIndex(relX >> 4, relY >> 4, relZ >> 4)];
+        int relX = x - this.baseX;
+        int relY = y - this.baseY;
+        int relZ = z - this.baseZ;
 
-        if (blockEntities == null) {
-            return null;
-        }
-
-        return blockEntities.get(getLocalBlockIndex(relX & 15, relY & 15, relZ & 15));
+        return this.sections[getLocalSectionIndex(relX >> 4, relY >> 4, relZ >> 4)]
+                .getBlockEntity(relX & 15, relY & 15, relZ & 15);
     }
 
     @Override
-    public int getBlockTint(BlockPos pos, ColorResolver resolver) {
-        return this.biomeColors.getColor(resolver, pos.getX(), pos.getY(), pos.getZ());
+    public int getCombinedLight(BlockPos pos, int ambientLight) {
+        if (!blockBoxContains(this.volume, pos.getX(), pos.getY(), pos.getZ())) {
+            return (this.defaultSkyLightValue << 20) | (ambientLight << 4);
+        }
+
+        int i = this.getLightFromNeighborsFor(EnumSkyBlock.SKY, pos);
+        int j = this.getLightFromNeighborsFor(EnumSkyBlock.BLOCK, pos);
+
+        if (j < ambientLight)
+        {
+            j = ambientLight;
+        }
+
+        return i << 20 | j << 4;
+    }
+
+    private int getLightFor(EnumSkyBlock type, int relX, int relY, int relZ) {
+        ClonedChunkSection section = this.sections[getLocalSectionIndex(relX >> 4, relY >> 4, relZ >> 4)];
+
+        return section.getLightLevel(relX & 15, relY & 15, relZ & 15, type);
+    }
+
+    private int getLightFromNeighborsFor(EnumSkyBlock type, BlockPos pos) {
+        if(!this.world.provider.hasSkyLight() && type == EnumSkyBlock.SKY) {
+            return this.defaultSkyLightValue;
+        }
+
+        int relX = pos.getX() - this.baseX;
+        int relY = pos.getY() - this.baseY;
+        int relZ = pos.getZ() - this.baseZ;
+
+        IBlockState state = this.getBlockStateRelative(relX, relY, relZ);
+
+        if(!state.useNeighborBrightness()) {
+            return getLightFor(type, relX, relY, relZ);
+        } else {
+            int west = getLightFor(type, relX - 1, relY, relZ);
+            int east = getLightFor(type, relX + 1, relY, relZ);
+            int up = getLightFor(type, relX, relY + 1, relZ);
+            int down = getLightFor(type, relX, relY - 1, relZ);
+            int north = getLightFor(type, relX, relY, relZ + 1);
+            int south = getLightFor(type, relX, relY, relZ - 1);
+
+            if(east > west) {
+                west = east;
+            }
+
+            if(up > west) {
+                west = up;
+            }
+
+            if(down > west) {
+                west = down;
+            }
+
+            if(north > west) {
+                west = north;
+            }
+
+            if(south > west) {
+                west = south;
+            }
+
+            return west;
+        }
     }
 
     @Override
-    public int getColor(BiomeColorSource source, int x, int y, int z) {
-        return this.biomeColors.getColor(source, x, y, z);
+    public Biome getBiome(BlockPos pos) {
+        int x2 = (pos.getX() - this.baseX) >> 4;
+        int z2 = (pos.getZ() - this.baseZ) >> 4;
+
+        ClonedChunkSection section = this.sections[getLocalChunkIndex(x2, z2)];
+
+        if (section != null) {
+            return section.getBiomeForNoiseGen(pos.getX() & 15, pos.getZ() & 15);
+        }
+
+        return Biomes.PLAINS;
     }
 
     @Override
-    public Object getBlockEntityRenderAttachment(BlockPos pos) {
-        int relX = pos.getX() - this.originX;
-        int relY = pos.getY() - this.originY;
-        int relZ = pos.getZ() - this.originZ;
-
-        if (!isInside(relX, relY, relZ)) {
-            return null;
+    public int getBlockTint(BlockPos pos, BiomeColorHelper.ColorResolver resolver) {
+        if(!blockBoxContains(this.volume, pos.getX(), pos.getY(), pos.getZ())) {
+            return resolver.getColorAtPos(Biomes.PLAINS, pos);
         }
 
-        var blockEntityRenderDataMap = this.blockEntityRenderDataArrays[getLocalSectionIndex(relX >> 4, relY >> 4, relZ >> 4)];
+        BiomeColorCache cache;
 
-        if (blockEntityRenderDataMap == null) {
-            return null;
+        if (this.prevColorResolver == resolver) {
+            cache = this.prevColorCache;
+        } else {
+            cache = this.biomeColorCaches.get(resolver);
+
+            if (cache == null) {
+                this.biomeColorCaches.put(resolver, cache = new BiomeColorCache(resolver, this));
+            }
+
+            this.prevColorResolver = resolver;
+            this.prevColorCache = cache;
         }
 
-        return blockEntityRenderDataMap.get(getLocalBlockIndex(relX & 15, relY & 15, relZ & 15));
+        return cache.getBlendedColor(pos);
     }
 
+    @Override
+    public int getStrongPower(BlockPos pos, EnumFacing direction) {
+        IBlockState state = this.getBlockState(pos);
+        return state.getBlock().getStrongPower(state, this, pos, direction);
+    }
+
+    @Override
+    public WorldType getWorldType() {
+        return this.worldType;
+    }
+
+    @Override
+    public boolean isSideSolid(BlockPos pos, EnumFacing side, boolean _default) {
+        return getBlockState(pos).isSideSolid(this, pos, side);
+    }
+
+    /**
+     * Gets or computes the biome at the given global coordinates.
+     */
+    public Biome getBiome(int x, int y, int z) {
+        int relX = x - this.baseX;
+        int relY = y - this.baseY;
+        int relZ = z - this.baseZ;
+
+        int idx = getLocalSectionIndex(relX >> 4, relY >> 4, relZ >> 4);
+
+        if (idx < 0 || idx >= this.biomeCaches.length) {
+            return Biomes.PLAINS;
+        }
+
+        return this.biomeCaches[idx][((z & 15) << 4) | (x & 15)];
+    }
+
+    public ChunkSectionPos getOrigin() {
+        return this.origin;
+    }
+
+    public float getBrightness(EnumFacing direction, boolean shaded) {
+        if (!shaded) {
+            return !world.provider.hasSkyLight() ? 0.9f : 1.0f;
+        }
+        return LightUtil.diffuseLight(direction);
+    }
+
+    // [VanillaCopy] PalettedContainer#toIndex
     public static int getLocalBlockIndex(int x, int y, int z) {
-        return (y << LOCAL_XYZ_BITS << LOCAL_XYZ_BITS) | (z << LOCAL_XYZ_BITS) | x;
+        return y << 8 | z << 4 | x;
     }
 
     public static int getLocalSectionIndex(int x, int y, int z) {
-        return (y * SECTION_ARRAY_LENGTH * SECTION_ARRAY_LENGTH) + (z * SECTION_ARRAY_LENGTH) + x;
+        return y << TABLE_BITS << TABLE_BITS | z << TABLE_BITS | x;
     }
 
-    private boolean isInside(int relX, int relY, int relZ) {
-        return relX >= 0 && relX < BLOCK_ARRAY_LENGTH && relZ >= 0 && relZ < BLOCK_ARRAY_LENGTH && relY >= 0 && relY < BLOCK_ARRAY_LENGTH;
+    public static int getLocalChunkIndex(int x, int z) {
+        return z << TABLE_BITS | x;
     }
 }

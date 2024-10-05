@@ -1,10 +1,8 @@
 package me.jellysquid.mods.sodium.client.gui.options.control;
 
-import com.mojang.blaze3d.vertex.PoseStack;
 import me.jellysquid.mods.sodium.client.gui.options.Option;
+import me.jellysquid.mods.sodium.client.gui.utils.Rect2i;
 import me.jellysquid.mods.sodium.client.util.Dim2i;
-import net.minecraft.client.renderer.Rect2i;
-import org.embeddedt.embeddium.gui.theme.DefaultColors;
 
 public class TickBoxControl implements Control<Boolean> {
     private final Option<Boolean> option;
@@ -38,8 +36,8 @@ public class TickBoxControl implements Control<Boolean> {
         }
 
         @Override
-        public void render(PoseStack drawContext, int mouseX, int mouseY, float delta) {
-            super.render(drawContext, mouseX, mouseY, delta);
+        public void render(int mouseX, int mouseY, float delta) {
+            super.render(mouseX, mouseY, delta);
 
             final int x = this.button.getX();
             final int y = this.button.getY();
@@ -47,27 +45,27 @@ public class TickBoxControl implements Control<Boolean> {
             final int h = y + this.button.getHeight();
 
             final boolean enabled = this.option.isAvailable();
-            final boolean ticked = this.option.getValue();
+            final boolean ticked = enabled && this.option.getValue();
 
             final int color;
 
             if (enabled) {
-                color = ticked ? DefaultColors.ELEMENT_ACTIVATED : 0xFFFFFFFF;
+                color = ticked ? 0xFF94E4D3 : 0xFFFFFFFF;
             } else {
                 color = 0xFFAAAAAA;
             }
 
             if (ticked) {
-                this.drawRect(drawContext, x + 2, y + 2, w - 2, h - 2, color);
+                this.drawRect(x + 2, y + 2, w - 2, h - 2, color);
             }
 
-            this.drawBorder(drawContext, x, y, w, h, color);
+            this.drawRectOutline(x, y, w, h, color);
         }
 
         @Override
         public boolean mouseClicked(double mouseX, double mouseY, int button) {
             if (this.option.isAvailable() && button == 0 && this.dim.containsCursor(mouseX, mouseY)) {
-                toggleControl();
+                this.option.setValue(!this.option.getValue());
                 this.playClickSound();
 
                 return true;
@@ -76,22 +74,20 @@ public class TickBoxControl implements Control<Boolean> {
             return false;
         }
 
-        @Override
-        public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-            if (!isFocused()) return false;
+        protected void drawRectOutline(int x, int y, int w, int h, int color) {
+            final float a = (float) (color >> 24 & 255) / 255.0F;
+            final float r = (float) (color >> 16 & 255) / 255.0F;
+            final float g = (float) (color >> 8 & 255) / 255.0F;
+            final float b = (float) (color & 255) / 255.0F;
 
-            if (keySelected(keyCode)) {
-                toggleControl();
-                this.playClickSound();
-
-                return true;
-            }
-
-            return false;
-        }
-
-        public void toggleControl() {
-            this.option.setValue(!this.option.getValue());
+            this.drawQuads(vertices -> {
+                addQuad(vertices, x, y, w, y + 1, a, r, g, b);
+                addQuad(vertices, x, h - 1, w, h, a, r, g, b);
+                addQuad(vertices, x, y, x + 1, h, a, r, g, b);
+                addQuad(vertices, w - 1, y, w, h, a, r, g, b);
+            });
         }
     }
+
+
 }

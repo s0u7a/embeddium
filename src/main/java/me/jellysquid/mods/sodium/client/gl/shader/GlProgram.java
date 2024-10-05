@@ -1,35 +1,26 @@
 package me.jellysquid.mods.sodium.client.gl.shader;
 
-import com.mojang.blaze3d.platform.GlStateManager;
 import me.jellysquid.mods.sodium.client.gl.GlObject;
-import me.jellysquid.mods.sodium.client.gl.shader.uniform.GlUniform;
-import me.jellysquid.mods.sodium.client.gl.shader.uniform.GlUniformBlock;
-import me.jellysquid.mods.sodium.client.render.chunk.shader.ShaderBindingContext;
-import net.minecraft.resources.ResourceLocation;
+import me.jellysquid.mods.sodium.client.gl.device.RenderDevice;
+import net.minecraft.util.ResourceLocation;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.lwjgl.opengl.GL20C;
-import org.lwjgl.opengl.GL30C;
-import org.lwjgl.opengl.GL32C;
-
-import java.util.function.Function;
-import java.util.function.IntFunction;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL20;
 
 /**
  * An OpenGL shader program.
  */
-public class GlProgram<T> extends GlObject implements ShaderBindingContext {
+public abstract class GlProgram extends GlObject {
     private static final Logger LOGGER = LogManager.getLogger(GlProgram.class);
 
-    private final T shaderInterface;
+    private final ResourceLocation name;
 
-    protected GlProgram(int program, Function<ShaderBindingContext, T> interfaceFactory) {
+    protected GlProgram(RenderDevice owner, ResourceLocation name, int program) {
+        super(owner);
+
+        this.name = name;
         this.setHandle(program);
-        this.shaderInterface = interfaceFactory.apply(this);
-    }
-
-    public T getInterface() {
-        return this.shaderInterface;
     }
 
     public static Builder builder(ResourceLocation identifier) {
@@ -37,41 +28,37 @@ public class GlProgram<T> extends GlObject implements ShaderBindingContext {
     }
 
     public void bind() {
-        GL20C.glUseProgram(this.handle());
+        GL20.glUseProgram(this.handle());
     }
 
     public void unbind() {
-        GL20C.glUseProgram(0);
+        GL20.glUseProgram(0);
     }
 
-    public void delete() {
-        GL20C.glDeleteProgram(this.handle());
-
-        this.invalidateHandle();
+    public ResourceLocation getName() {
+        return this.name;
     }
 
-    @Override
-    public <U extends GlUniform<?>> U bindUniform(String name, IntFunction<U> factory) {
-        int index = GL20C.glGetUniformLocation(this.handle(), name);
+    /**
+     * Retrieves the index of the uniform with the given name.
+     * @param name The name of the uniform to find the index of
+     * @return The uniform's index
+     * @throws NullPointerException If no uniform exists with the given name
+     */
+    public int getUniformLocation(String name) {
+        int index = GL20.glGetUniformLocation(this.handle(), name);
 
         if (index < 0) {
             throw new NullPointerException("No uniform exists with name: " + name);
         }
 
-        return factory.apply(index);
+        return index;
     }
 
-    @Override
-    public GlUniformBlock bindUniformBlock(String name, int bindingPoint) {
-        int index = GL32C.glGetUniformBlockIndex(this.handle(), name);
+    public void delete() {
+        GL20.glDeleteProgram(this.handle());
 
-        if (index < 0) {
-            throw new NullPointerException("No uniform block exists with name: " + name);
-        }
-
-        GL32C.glUniformBlockBinding(this.handle(), index, bindingPoint);
-
-        return new GlUniformBlock(bindingPoint);
+        this.invalidateHandle();
     }
 
     public static class Builder {
@@ -80,11 +67,11 @@ public class GlProgram<T> extends GlObject implements ShaderBindingContext {
 
         public Builder(ResourceLocation name) {
             this.name = name;
-            this.program = GL20C.glCreateProgram();
+            this.program = GL20.glCreateProgram();
         }
 
         public Builder attachShader(GlShader shader) {
-            GL20C.glAttachShader(this.program, shader.handle());
+            GL20.glAttachShader(this.program, shader.handle());
 
             return this;
         }
@@ -94,38 +81,36 @@ public class GlProgram<T> extends GlObject implements ShaderBindingContext {
          * program. This container can, for example, provide methods for updating the specific uniforms of that shader
          * set.
          *
-         * @param factory The factory which will create the shader program's interface
-         * @param <U> The interface type for the shader program
+         * @param factory The factory which will create the shader program's container
+         * @param <P> The type which should be instantiated with the new program's handle
          * @return An instantiated shader container as provided by the factory
          */
-        public <U> GlProgram<U> link(Function<ShaderBindingContext, U> factory) {
-            GL20C.glLinkProgram(this.program);
+        public <P extends GlProgram> P build(ProgramFactory<P> factory) {
+            GL20.glLinkProgram(this.program);
 
-            String log = GL20C.glGetProgramInfoLog(this.program);
+            String log = GL20.glGetProgramInfoLog(this.program, 32767);
 
             if (!log.isEmpty()) {
                 LOGGER.warn("Program link log for " + this.name + ": " + log);
             }
 
-            int result = GlStateManager.glGetProgrami(this.program, GL20C.GL_LINK_STATUS);
+            int result = GL20.glGetProgrami(this.program, GL20.GL_LINK_STATUS);
 
-            if (result != GL20C.GL_TRUE) {
+            if (result != GL11.GL_TRUE) {
                 throw new RuntimeException("Shader program linking failed, see log for details");
             }
 
-            return new GlProgram<>(this.program, factory);
+            return factory.create(this.name, this.program);
         }
 
-        public Builder bindAttribute(String name, int index) {
-            GL20C.glBindAttribLocation(this.program, index, name);
+        public Builder bindAttribute(String name, ShaderBindingPoint binding) {
+            GL20.glBindAttribLocation(this.program, binding.getGenericAttributeIndex(), name);
 
             return this;
         }
+    }
 
-        public Builder bindFragmentData(String name, int index) {
-            GL30C.glBindFragDataLocation(this.program, index, name);
-
-            return this;
-        }
+    public interface ProgramFactory<P extends GlProgram> {
+        P create(ResourceLocation name, int handle);
     }
 }
