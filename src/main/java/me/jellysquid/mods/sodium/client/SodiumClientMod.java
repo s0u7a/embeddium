@@ -1,70 +1,25 @@
 package me.jellysquid.mods.sodium.client;
 
-import me.jellysquid.mods.sodium.client.data.fingerprint.FingerprintMeasure;
-import me.jellysquid.mods.sodium.client.data.fingerprint.HashedFingerprint;
 import me.jellysquid.mods.sodium.client.gui.SodiumGameOptions;
-import net.minecraftforge.fml.ModList;
+import net.minecraft.client.Minecraft;
+import net.minecraftforge.fml.common.Loader;
 import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
-import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
-import net.minecraftforge.fml.loading.FMLLoader;
-
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.embeddedt.embeddium.api.EmbeddiumConstants;
-import org.embeddedt.embeddium.render.ShaderModBridge;
-import org.embeddedt.embeddium.taint.incompats.IncompatibleModManager;
-import org.embeddedt.embeddium.taint.scanning.TaintDetector;
-import org.embeddedt.embeddium.util.sodium.FlawlessFrames;
 
-import java.io.IOException;
-
-@Mod(SodiumClientMod.MODID)
+@Mod(modid = SodiumClientMod.MODID, useMetadata = true)
 public class SodiumClientMod {
-    public static final String MODID = EmbeddiumConstants.MODID;
-    public static final String MODNAME = EmbeddiumConstants.MODNAME;
 
-    private static final Logger LOGGER = LogManager.getLogger(MODNAME);
-    private static SodiumGameOptions CONFIG = loadConfig();
+    public static final String MODID = "vintagium";
+    public static final String MODNAME = "Vintagium";
+    public static final String MOD_VERSION = Loader.instance().getIndexedModList().get(MODID).getVersion();
 
-    private static String MOD_VERSION;
-
-    public SodiumClientMod() {
-        MOD_VERSION = ModList.get().getModContainerById(MODID).get().getModInfo().getVersion().toString();
-        //ModLoadingContext.get().registerExtensionPoint(IExtensionPoint.DisplayTest.class, () -> new IExtensionPoint.DisplayTest(() -> NetworkConstants.IGNORESERVERONLY, (a, b) -> true));
-
-        if (!FMLLoader.getDist().isClient()) {
-            return;
-        }
-
-        TaintDetector.init();
-
-        var eventBus = FMLJavaModLoadingContext.get().getModEventBus();
-
-        if("true".equals(System.getProperty("embeddium.enableGameTest"))) {
-            try {
-                eventBus.register(Class.forName("org.embeddedt.embeddium.impl.gametest.content.TestRegistry"));
-            } catch (ClassNotFoundException e) {
-                throw new RuntimeException(e);
-            }
-        }
-        eventBus.addListener(this::onClientSetup);
-
-        try {
-            updateFingerprint();
-        } catch (Throwable t) {
-            LOGGER.error("Failed to update fingerprint", t);
-        }
-    }
-
-    public void onClientSetup(final FMLClientSetupEvent event) {
-        IncompatibleModManager.checkMods(event);
-        FlawlessFrames.onClientInitialization();
-    }
+    private static SodiumGameOptions CONFIG;
+    public static Logger LOGGER = LogManager.getLogger(MODNAME);
 
     public static SodiumGameOptions options() {
         if (CONFIG == null) {
-            throw new IllegalStateException("Config not yet available");
+            CONFIG = loadConfig();
         }
 
         return CONFIG;
@@ -72,78 +27,21 @@ public class SodiumClientMod {
 
     public static Logger logger() {
         if (LOGGER == null) {
-            throw new IllegalStateException("Logger not yet available");
+            LOGGER = LogManager.getLogger(MODNAME);
         }
 
         return LOGGER;
     }
 
     private static SodiumGameOptions loadConfig() {
-        try {
-            return SodiumGameOptions.load();
-        } catch (Exception e) {
-            LOGGER.error("Failed to load configuration file", e);
-            LOGGER.error("Using default configuration file in read-only mode");
-
-            var config = new SodiumGameOptions();
-            config.setReadOnly();
-
-            return config;
-        }
-    }
-
-    public static void restoreDefaultOptions() {
-        CONFIG = SodiumGameOptions.defaults();
-
-        try {
-            CONFIG.writeChanges();
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to write config file", e);
-        }
+        return SodiumGameOptions.load(Minecraft.getMinecraft().gameDir.toPath().resolve("config").resolve(MODID + "-options.json"));
     }
 
     public static String getVersion() {
-        if (MOD_VERSION == null) {
-            throw new NullPointerException("Mod version hasn't been populated yet");
-        }
-
         return MOD_VERSION;
     }
-
-    private static void updateFingerprint() {
-        var current = FingerprintMeasure.create();
-
-        if (current == null) {
-            return;
-        }
-
-        HashedFingerprint saved = null;
-
-        try {
-            saved = HashedFingerprint.loadFromDisk();
-        } catch (Throwable t) {
-            LOGGER.error("Failed to load existing fingerprint",  t);
-        }
-
-        if (saved == null || !current.looselyMatches(saved)) {
-            HashedFingerprint.writeToDisk(current.hashed());
-
-            CONFIG.notifications.hasSeenDonationPrompt = false;
-            CONFIG.notifications.hasClearedDonationButton = false;
-
-            try {
-                CONFIG.writeChanges();
-            } catch (IOException e) {
-                LOGGER.error("Failed to update config file", e);
-            }
-        }
-    }
-
-    public static boolean canUseVanillaVertices() {
-        return !SodiumClientMod.options().performance.useCompactVertexFormat && !ShaderModBridge.areShadersEnabled();
-    }
-
-    public static boolean canApplyTranslucencySorting() {
-        return SodiumClientMod.options().performance.useTranslucentFaceSorting && !ShaderModBridge.isNvidiumEnabled();
+    
+    public static boolean isDirectMemoryAccessEnabled() {
+        return options().advanced.allowDirectMemoryAccess;
     }
 }
